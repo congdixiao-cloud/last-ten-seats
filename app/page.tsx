@@ -303,8 +303,7 @@ function pickRelationship(seed: number, ownedNames: string[]) {
   return pool[Math.floor(seeded(seed * 1.77 + 31) * pool.length)];
 }
 function survivorQuality(roll: number): Quality { return roll < .56 ? "普通" : roll < .83 ? "熟练" : roll < .94 ? "精英" : roll < .99 ? "名家" : "传奇"; }
-function generateSurvivorCandidates(ownedNames: string[]) {
-  const count = 1 + Math.floor(Math.random() * 3);
+function generateSurvivors(count: number, ownedNames: string[]) {
   const picked: Crew[] = [];
   for (let index = 0; index < count; index++) {
     const quality = survivorQuality(Math.random());
@@ -316,6 +315,23 @@ function generateSurvivorCandidates(ownedNames: string[]) {
     if (person) picked.push({ ...person, id: Date.now() + index + Math.floor(Math.random() * 100000), stamina: 100, health: "健康", gear: { 武器: "无", 防具: "无", 头盔: "无", 背包: "无", 特殊: "无" } });
   }
   return picked;
+}
+function generateSurvivorCandidates(ownedNames: string[]) {
+  return generateSurvivors(1 + Math.floor(Math.random() * 3), ownedNames);
+}
+function generateStartingCrew() {
+  return generateSurvivors(3, []);
+}
+function assignCrewToStations(members: Crew[]) {
+  const assignments: (number | null)[] = Array(rvStations.length).fill(null);
+  members.forEach(person => {
+    const registered = rvStations.findIndex((station, index) => station.role === person.role && assignments[index] === null);
+    const familiar = rvStations.findIndex((station, index) => station.role === person.subRole && assignments[index] === null);
+    const available = assignments.findIndex(id => id === null);
+    const target = registered >= 0 ? registered : familiar >= 0 ? familiar : available;
+    if (target >= 0) assignments[target] = person.id;
+  });
+  return assignments;
 }
 function pickGrade(seed: number, zone: number, place: number, market = false) {
   const fieldWeights = [
@@ -646,11 +662,18 @@ export default function Home() {
   ];
 
   useEffect(() => {
+    const startFreshGame = () => {
+      const startingCrew = generateStartingCrew();
+      setCrew(startingCrew);
+      setSelectedCrew(startingCrew[0]?.id ?? 0);
+      setExpedition(startingCrew.map(person => person.id));
+      setSeatAssignments(assignCrewToStations(startingCrew));
+    };
     try {
       const raw = window.localStorage.getItem(LOCAL_SAVE_KEY);
-      if (!raw) return;
+      if (!raw) { startFreshGame(); return; }
       const saved = JSON.parse(raw) as GameSave;
-      if (saved.version !== 1 || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) return;
+      if (saved.version !== 1 || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) { startFreshGame(); return; }
       const state = saved.state;
       const restoredCrew = state.crew.map((person, index) => normalizeCrewCombat(person, index));
       setTab(state.tab); setMode(state.mode); setDay(state.day); setCrew(restoredCrew); setSelectedCrew(state.selectedCrew);
@@ -667,6 +690,7 @@ export default function Home() {
       setSearchingId(null); setSearchProgress(0); setDraggedLoot(null); setBattle(false); setExtracting(0); setSelectedRaidItem(null);
     } catch {
       // 损坏或旧格式的存档不会阻止游戏启动；下一次有效状态变化会覆盖它。
+      startFreshGame();
     } finally {
       setSaveReady(true);
     }
