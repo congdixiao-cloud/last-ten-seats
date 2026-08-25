@@ -28,7 +28,7 @@ type AiSquad = { zone: number; searched: number; value: number; status: "搜索�
 type CombatUnit = { id: number; name: string; role: string; attack: number; defense: number; maxHp: number; hp: number };
 
 type GameSave = {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   savedAt: number;
   state: {
     tab: Tab; mode: GameMode; day: number; crew: Crew[]; selectedCrew: number; expedition: number[]; seatAssignments: (number | null)[];
@@ -37,7 +37,7 @@ type GameSave = {
     upgrades: { 床位: number; 仓库: number; 医疗站: number; 工作台: number; 侦察台: number; 武器站: number };
     kit: Kit; ownedEquipment: string[]; activePlace: Place | null; raidSeed: number; zone: number; roomIndex?: number; safeRemaining?: number; overtime?: number; escapeProtection?: number; fieldLoot: FieldLoot[]; risk: number;
     logs: string[]; searchedCount: number; searchSeconds: number; packedBag: PackedLoot[]; safeLoot: PackedLoot[]; ai: AiSquad;
-    selectedExit: ExitId; roundOutcome: string[]; survivorCandidates: Crew[]; raidParty?: CombatUnit[]; enemyParty?: CombatUnit[]; enemyLoot?: PackedLoot[]; enemyDefeated?: boolean; battleLogs?: string[]; locationEscapes?: Record<number, number>; relationshipRoster: Relationship[];
+    selectedExit: ExitId; roundOutcome: string[]; survivorCandidates: Crew[]; raidParty?: CombatUnit[]; enemyParty?: CombatUnit[]; enemyLoot?: PackedLoot[]; enemyDefeated?: boolean; enemyWave?: number; battleLogs?: string[]; locationEscapes?: Record<number, number>; relationshipRoster: Relationship[];
     relationshipCandidate: Relationship | null; relationshipAssignments: (number | null)[]; companionUnlocked: boolean; relationshipContacts: number;
     exclusiveLoadout: Record<number, PackedLoot>; equipmentStash: PackedLoot[]; survivalStash: PackedLoot[]; objectStash: PackedLoot[];
     installed: Record<HardwareKind, PackedLoot[]>; miningProgress: number; coins: number; marketOffers: FieldLoot[]; seenItems: string[]; collectedItems: string[];
@@ -370,20 +370,27 @@ function enemyQuality(place: Place, seed: number): Quality {
   for (let index = 0; index < weights.length; index++) { cursor += weights[index]; if (roll <= cursor) return catalogQualities[index]; }
   return "普通";
 }
-function generateEnemyParty(place: Place, day: number, raidSeed: number): CombatUnit[] {
+function generateEnemyParty(place: Place, day: number, raidSeed: number, wave = 1): CombatUnit[] {
   const chosen = new Set<string>();
+  const locationPressure = (place.level - 1) / 9;
+  const dayPressure = Math.min(.35, Math.max(0, day - 1) * .012);
+  const wavePressure = wave === 2 ? .12 : 0;
+  const attackMultiplier = 1.05 + locationPressure * .45 + dayPressure + wavePressure;
+  const defenseMultiplier = 1.04 + locationPressure * .38 + dayPressure * .8 + wavePressure;
   return Array.from({ length: 3 }, (_, index) => {
-    const quality = enemyQuality(place, raidSeed + day * 211 + index * 991);
+    const quality = enemyQuality(place, raidSeed + wave * 1543 + day * 211 + index * 991);
     const exact = allPersonnelCatalog.filter(person => person.quality === quality && !chosen.has(person.name));
     const fallback = allPersonnelCatalog.filter(person => !chosen.has(person.name));
     const pool = exact.length ? exact : fallback;
-    const person = pool[Math.floor(seeded(raidSeed * .31 + place.id * 71 + day * 43 + index * 137) * pool.length)] ?? allPersonnelCatalog[0];
+    const person = pool[Math.floor(seeded(raidSeed * .31 + wave * 269 + place.id * 71 + day * 43 + index * 137) * pool.length)] ?? allPersonnelCatalog[0];
     chosen.add(person.name);
-    const maxHp = Math.round(72 + person.defense * .48);
-    return { id: -(place.id * 1000 + day * 10 + index + 1), name: person.name, role: `${person.quality} · ${person.role}`, attack: person.attack, defense: person.defense, maxHp, hp: maxHp };
+    const attack = Math.round((person.attack + place.level * 1.5) * attackMultiplier);
+    const defense = Math.round((person.defense + place.level * 1.5) * defenseMultiplier);
+    const maxHp = Math.round(78 + defense * .58 + place.level * 3 + (wave === 2 ? 12 : 0));
+    return { id: -(wave * 100000 + place.id * 1000 + day * 10 + index + 1), name: person.name, role: `第${wave}队 · ${person.quality} · ${person.role}`, attack, defense, maxHp, hp: maxHp };
   });
 }
-function generateEnemyLoot(place: Place, day: number): PackedLoot[] {
+function generateEnemyLoot(place: Place, day: number, wave = 1): PackedLoot[] {
   const picked: PackedLoot[] = [];
   for (let index = 0; index < 5; index++) {
     const grade = pickGrade(day * 173 + place.id * 67 + index * 31, Math.min(2, Math.floor((place.id - 1) / 4)), place.id);
@@ -392,7 +399,7 @@ function generateEnemyLoot(place: Place, day: number): PackedLoot[] {
     const pool = exact.length ? exact : fallback;
     const template = pool[Math.floor(seeded(day * 73 + place.id * 41 + index * 29) * pool.length)] ?? fieldLootTemplates[0];
     const fit = firstFit(picked, template.w, template.h, 8, 10);
-    if (fit) picked.push({ ...template, id: 950000 + day * 100 + place.id * 10 + index, x: 0, y: 0, revealed: true, moved: true, ...fit });
+    if (fit) picked.push({ ...template, id: 950000 + wave * 10000 + day * 100 + place.id * 10 + index, x: 0, y: 0, revealed: true, moved: true, ...fit });
   }
   return picked;
 }
@@ -580,6 +587,7 @@ export default function Home() {
   const [enemyParty, setEnemyParty] = useState<CombatUnit[]>([]);
   const [enemyLoot, setEnemyLoot] = useState<PackedLoot[]>([]);
   const [enemyDefeated, setEnemyDefeated] = useState(false);
+  const [enemyWave, setEnemyWave] = useState(1);
   const [escapeCooldown, setEscapeCooldown] = useState(0);
   const [battleLogs, setBattleLogs] = useState<string[]>([]);
   const [extracting, setExtracting] = useState(0);
@@ -647,6 +655,7 @@ export default function Home() {
   const enemyHpRatio = enemyParty.length ? enemyParty.reduce((sum, unit) => sum + unit.hp, 0) / enemyParty.reduce((sum, unit) => sum + unit.maxHp, 0) : 1;
   const allyPower = raidParty.reduce((sum, unit) => sum + (unit.hp > 0 ? unit.attack + unit.defense : 0), 0);
   const enemyPower = enemyParty.reduce((sum, unit) => sum + (unit.hp > 0 ? unit.attack + unit.defense : 0), 0);
+  const enemySquadsDefeated = enemyDefeated ? 2 : enemyWave - 1;
   const disengageChance = Math.max(15, Math.min(85, Math.round(35 + (allyPower - enemyPower) * .08 + (1 - enemyHpRatio) * 22 - (1 - allyHpRatio) * 18 - zone * 7 + (activeRole("侦察员") ? 12 : 0) + (kit.tactical === "烟雾弹" ? 18 : 0))));
   const repairTotal = Object.values(repair).reduce((a, b) => a + b, 0);
   const repairPercent = Math.min(100, Math.round(repairTotal / 38 * 100));
@@ -680,7 +689,7 @@ export default function Home() {
       const raw = window.localStorage.getItem(LOCAL_SAVE_KEY);
       if (!raw) { startFreshGame(); return; }
       const saved = JSON.parse(raw) as GameSave;
-      if (![1, 2].includes(saved.version) || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) { startFreshGame(); return; }
+      if (![1, 2, 3].includes(saved.version) || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) { startFreshGame(); return; }
       const state = saved.state;
       const shouldGrantLegacyStarter = saved.version === 1 && !state.companionUnlocked && !state.objectStash.some(item => item.name === "绯红邀约终端");
       const restoredObjectStash = shouldGrantLegacyStarter ? repack([...state.objectStash, createStarterCrimsonTerminal()]) : state.objectStash;
@@ -691,7 +700,7 @@ export default function Home() {
       const restoredPlace = state.activePlace ? locations.find(place => place.id === state.activePlace?.id) ?? state.activePlace : null;
       setActivePlace(restoredPlace); setLocationEscapes(state.locationEscapes ?? {}); setRaidSeed(state.raidSeed); setZone(state.zone); setRoomIndex(state.roomIndex ?? 0); setSafeRemaining(state.safeRemaining ?? 0); setOvertime(state.overtime ?? 0); setEscapeProtection(state.escapeProtection ?? 0); setFieldLoot(state.fieldLoot); setRisk(state.risk);
       setLogs(state.logs); setSearchedCount(state.searchedCount); setSearchSeconds(state.searchSeconds); setPackedBag(state.packedBag); setSafeLoot(state.safeLoot);
-      setAi(state.ai); setSelectedExit(state.selectedExit); setRoundOutcome(state.roundOutcome); setSurvivorCandidates((state.survivorCandidates ?? []).map((person, index) => normalizeCrewCombat(person, index))); setRaidParty(state.raidParty ?? []); setEnemyParty(state.enemyParty ?? []); setEnemyLoot(state.enemyLoot ?? []); setEnemyDefeated(state.enemyDefeated ?? false); setBattleLogs(state.battleLogs ?? []);
+      setAi(state.ai); setSelectedExit(state.selectedExit); setRoundOutcome(state.roundOutcome); setSurvivorCandidates((state.survivorCandidates ?? []).map((person, index) => normalizeCrewCombat(person, index))); setRaidParty(state.raidParty ?? []); setEnemyParty(state.enemyParty ?? []); setEnemyLoot(state.enemyLoot ?? []); setEnemyDefeated(state.enemyDefeated ?? false); setEnemyWave(state.enemyWave ?? (state.enemyDefeated ? 2 : 1)); setBattleLogs(state.battleLogs ?? []);
       setRelationshipRoster(state.relationshipRoster); setRelationshipCandidate(state.relationshipCandidate); setRelationshipAssignments(state.relationshipAssignments);
       setCompanionUnlocked(state.companionUnlocked); setRelationshipContacts(state.relationshipContacts); setExclusiveLoadout(state.exclusiveLoadout);
       setEquipmentStash(state.equipmentStash); setSurvivalStash(state.survivalStash); setObjectStash(restoredObjectStash); setInstalled(state.installed);
@@ -708,23 +717,23 @@ export default function Home() {
   useEffect(() => {
     if (!saveReady) return;
     const save: GameSave = {
-      version: 2,
+      version: 3,
       savedAt: Date.now(),
       state: {
         tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment,
         activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome,
-        survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts,
+        survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, enemyWave, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts,
         exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems,
       },
     };
     try { window.localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(save)); } catch { /* 浏览器禁用或空间不足时保持当前内存进度。 */ }
-  }, [saveReady, tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment, activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome, survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts, exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems]);
+  }, [saveReady, tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment, activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome, survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, enemyWave, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts, exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems]);
 
   useEffect(() => {
     if (!saveReady || mode !== "explore" || !activePlace) return;
     if (raidParty.length === 0) setRaidParty(buildRaidParty());
-    if (!enemyDefeated && enemyParty.length === 0) setEnemyParty(generateEnemyParty(activePlace, day, raidSeed));
-    if (!enemyDefeated && enemyLoot.length === 0) setEnemyLoot(generateEnemyLoot(activePlace, day));
+    if (!enemyDefeated && enemyParty.length === 0) setEnemyParty(generateEnemyParty(activePlace, day, raidSeed, enemyWave));
+    if (!enemyDefeated && enemyLoot.length === 0) setEnemyLoot(generateEnemyLoot(activePlace, day, enemyWave));
     if (safeRemaining === 0 && overtime === 0) setSafeRemaining(roomSafeTime(zone));
   }, [saveReady]);
 
@@ -756,6 +765,8 @@ export default function Home() {
         const found = pickRelationship(raidSeed + item.id + day * 211, relationshipRoster.map(person => person.name));
         if (found) { setRelationshipCandidate(found); setLogs(prev => [`极罕见邂逅：无线电里传来一段私人频道邀请，署名「${found.name}」。`, ...prev].slice(0, 6)); }
       }
+      const lootAmbush = seeded(raidSeed * 1.37 + item.id * 2.11 + nextSearch * 193) < .05;
+      if (!enemyDefeated && lootAmbush) beginCombat(`物资伏击：打开「${item.name}」时，藏在容器后的敌人突然开火。`);
     }, 80);
     return () => window.clearInterval(timer);
   }, [searchingId]);
@@ -794,7 +805,7 @@ export default function Home() {
       const events: string[] = [];
       const livingAllies = raidParty.filter(unit => unit.hp > 0);
       const livingEnemies = enemyParty.filter(unit => unit.hp > 0);
-      const damageFor = (attacker: CombatUnit, target: CombatUnit) => Math.max(1, Math.min(48, Math.round(3 + attacker.attack * (.32 + Math.random() * .06) - target.defense * .18)));
+      const damageFor = (attacker: CombatUnit, target: CombatUnit) => Math.max(1, Math.min(72, Math.round(3 + attacker.attack * (.34 + Math.random() * .08) - target.defense * .2)));
       livingAllies.forEach((attacker, index) => {
         const targets = nextEnemies.filter(unit => unit.hp > 0); const target = targets[index % targets.length]; if (!target) return;
         const damage = damageFor(attacker, target);
@@ -843,20 +854,31 @@ export default function Home() {
     setLogs(prev => [`${reason}：进入${roomNames[nextRoom]}，获得 ${roomSafeTime(nextZone)} 秒安全搜索时间。`, ...prev].slice(0, 6));
   }
 
-  function beginCombat() {
+  function beginCombat(trigger?: string) {
     if (battle || enemyDefeated || !enemyParty.some(unit => unit.hp > 0)) return;
     const interruptedExit = extracting > 0 ? `${selectedExit}倒计时剩余${extracting}秒时被敌队截停。` : null;
+    const encounterLog = interruptedExit ?? trigger ?? `暴露检定触发：第${enemyWave}支拾荒者小队在${roomNames[roomIndex]}发现了你们。`;
     setExtracting(0); setSearchingId(null); setSearchProgress(0); setSelectedRaidItem(null); setBattle(true); setEscapeCooldown(5);
-    setBattleLogs([interruptedExit ?? `暴露检定触发：拾荒者小队在${roomNames[roomIndex]}发现了你们。`]);
+    setBattleLogs([encounterLog]);
     if (interruptedExit) setRoundOutcome(prev => [interruptedExit, ...prev]);
-    setLogs(prev => [interruptedExit ?? `遭遇敌方三人小队，战斗开始；双方生命会保留到下一次接触。`, ...prev].slice(0, 6));
+    setLogs(prev => [encounterLog, `遭遇第${enemyWave}/2支敌方三人小队；双方生命会保留到下一次接触。`, ...prev].slice(0, 6));
   }
 
   function resolveBattleVictory() {
+    if (enemyWave === 1 && activePlace) {
+      const secondParty = generateEnemyParty(activePlace, day, raidSeed, 2);
+      const secondLoot = generateEnemyLoot(activePlace, day, 2);
+      setEnemyWave(2); setEnemyParty(secondParty); setEnemyLoot(prev => [...prev, ...secondLoot]); setEscapeCooldown(5);
+      setAi(prev => ({ ...prev, status: "搜索中", signal: "第一队失联后，第二支强化小队立即接替交战" }));
+      setLogs(prev => [`第一支敌队已击破，但第二支强化小队从侧翼进入战场；我方生命不会恢复。`, ...prev].slice(0, 6));
+      setBattleLogs(prev => [`第二波抵达：强化小队接替交火，击破后才算彻底清场。`, `第一支敌队已全员倒地。`, ...prev].slice(0, 12));
+      setRoundOutcome(prev => [`击破第1/2支拾荒者小队，第二队已接战`, ...prev]);
+      return;
+    }
     setBattle(false); setEnemyDefeated(true); setEscapeCooldown(0);
-    setAi(prev => ({ ...prev, status: "被击退", signal: "敌方全员倒地，战局中不再有其他搜索者" }));
-    setLogs(prev => [`敌方全员倒地：已控制对方背包，此后房间不再进行遇敌检定。`, ...prev].slice(0, 6));
-    setRoundOutcome(prev => [`击败拾荒者小队，可检索其全部装备与背包`, ...prev]);
+    setAi(prev => ({ ...prev, status: "被击退", signal: "两支敌队全部倒地，战局中不再有其他搜索者" }));
+    setLogs(prev => [`两支敌队全部倒地：已控制双方背包，此后房间不再进行遇敌检定。`, ...prev].slice(0, 6));
+    setRoundOutcome(prev => [`击败全部2支拾荒者小队，可检索双方装备与背包`, ...prev]);
   }
 
   function resolvePartyWipe() {
@@ -898,12 +920,12 @@ export default function Home() {
 
   function confirmPreparation() {
     if (expedition.length !== 3) return;
-    setMode("explore"); setRaidSeed(Math.floor(Math.random() * 1_000_000_000)); setActivePlace(null); setZone(0); setRoomIndex(0); setSafeRemaining(0); setOvertime(0); setEscapeProtection(0); setRisk(6); setPackedBag([]); setSafeLoot([]); setFieldLoot([]); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setRaidParty(buildRaidParty()); setEnemyParty([]); setEnemyLoot([]); setEnemyDefeated(false); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
-    setAi({ zone: 0, searched: 0, value: 0, status: "搜索中", signal: "无线电捕捉到另一支队伍的短讯" });
+    setMode("explore"); setRaidSeed(Math.floor(Math.random() * 1_000_000_000)); setActivePlace(null); setZone(0); setRoomIndex(0); setSafeRemaining(0); setOvertime(0); setEscapeProtection(0); setRisk(6); setPackedBag([]); setSafeLoot([]); setFieldLoot([]); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setRaidParty(buildRaidParty()); setEnemyParty([]); setEnemyLoot([]); setEnemyDefeated(false); setEnemyWave(1); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
+    setAi({ zone: 0, searched: 0, value: 0, status: "搜索中", signal: "无线电捕捉到两支队伍交替通联" });
     setLogs(["装备检查完毕，三人行动组离开房车；其余成员在后方提供职业支援。"]);
   }
   function toggleExpedition(id: number) { setExpedition(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 3 ? [...prev, id] : prev); }
-  function enterPlace(place: Place) { if (place.id > 1 && (locationEscapes[place.id - 1] ?? 0) < 2) return; const firstSafe = roomSafeTime(0, place); setActivePlace(place); setRoomIndex(0); setZone(0); setSafeRemaining(firstSafe); setOvertime(0); setFieldLoot(generateField(place.id, day, 0, raidSeed, 0)); setRaidParty(current => current.length ? current : buildRaidParty()); setEnemyParty(generateEnemyParty(place, day, raidSeed)); setEnemyLoot(generateEnemyLoot(place, day)); setEnemyDefeated(false); setRisk(Math.min(95, 5 + place.level * 4)); setLogs([`进入${place.name}·${roomNames[0]}。安全搜索时间 ${firstSafe} 秒，超时后每3秒检定一次遇敌。`]); }
+  function enterPlace(place: Place) { if (place.id > 1 && (locationEscapes[place.id - 1] ?? 0) < 2) return; const firstSafe = roomSafeTime(0, place); setActivePlace(place); setRoomIndex(0); setZone(0); setSafeRemaining(firstSafe); setOvertime(0); setFieldLoot(generateField(place.id, day, 0, raidSeed, 0)); setRaidParty(current => current.length ? current : buildRaidParty()); setEnemyWave(1); setEnemyParty(generateEnemyParty(place, day, raidSeed, 1)); setEnemyLoot(generateEnemyLoot(place, day, 1)); setEnemyDefeated(false); setRisk(Math.min(95, 5 + place.level * 4)); setLogs([`进入${place.name}·${roomNames[0]}。本局存在2支敌队；安全搜索时间 ${firstSafe} 秒，每件物资另有5%伏击概率。`]); }
   function advanceRoom() { if (!activePlace || roomIndex >= roomZones.length - 1 || searchingId !== null || battle) return; enterRoom(roomIndex + 1); }
   function beginSearch(id: number) { const item = fieldLoot.find(entry => entry.id === id); if (!item || item.revealed || item.moved || searchingId !== null || battle || extracting > 0) return; setSearchingId(id); setLogs(prev => [`正在辨认一个 ${item.w}×${item.h} 的未知物品……`, ...prev].slice(0, 6)); }
 
@@ -1124,8 +1146,8 @@ export default function Home() {
     <header className="topbar explore-top"><div className="brand"><span className="brand-mark">//</span><div><b>现场搜刮</b><small>{activePlace?.name ?? "选择地点"} · 第 {day} 日</small></div></div>{activePlace && <div className="room-progress">{roomNames.map((name, index) => <span className={index < roomIndex ? "done" : index === roomIndex ? "active" : ""} key={name}><i>{index + 1}</i><b>{index === roomIndex ? name : zoneNames[roomZones[index]]}</b></span>)}</div>}<div className={`raid-clock ${overtime > 0 ? "exposed" : ""} ${enemyDefeated ? "cleared" : ""}`}>{!activePlace ? <><span>行动准备度</span><strong>{preparationScore}</strong><small>{preparationTier === 2 ? "强力" : preparationTier === 1 ? "良好" : "普通"}</small></> : enemyDefeated ? <><span>区域已经清场</span><strong>SAFE</strong><small>不会再出现其他搜索者</small></> : safeRemaining > 0 ? <><span>安全搜索时间</span><strong>00:{String(safeRemaining).padStart(2, "0")}</strong><small>{preparationTier === 2 ? "强力配置" : preparationTier === 1 ? "良好配置" : "普通配置"} · 准备度 {preparationScore}</small></> : <><span>已暴露 {overtime}秒</span><strong>{encounterChance}%</strong><small>遇敌率 · {3 - overtime % 3}秒后检定</small></>}</div></header>
     {!activePlace ? <section className="location-select"><div className="section-title"><small>CHOOSE A RAID · 10 STAGES</small><h1>十个地点，逐段突破感染区</h1><p>默认只开放第一个地点；在一个地点成功撤离2次，才会解锁下一区域。越深处高品质物资和高阶敌人越常见。</p></div><div className="location-grid">{locations.map((place, i) => { const previousEscapes = place.id === 1 ? 2 : locationEscapes[place.id - 1] ?? 0; const unlocked = place.id === 1 || previousEscapes >= 2; const clears = locationEscapes[place.id] ?? 0; return <button disabled={!unlocked} className={`location-card ${place.accent} ${unlocked ? "" : "locked"}`} onClick={() => enterPlace(place)} key={place.id}><span>{String(i + 1).padStart(2, "0")}</span><em>{place.risk}风险</em><h3>{place.name}</h3><p>{place.hint}</p><div className="location-clearance"><i style={{ width: `${Math.min(100, clears * 50)}%` }} /><small>{unlocked ? `本区成功撤离 ${clears}/2` : `上一区域 ${previousEscapes}/2`}</small></div><b>{unlocked ? "进入第一个房间 →" : "LOCKED · 完成上一区域"}</b></button>; })}</div></section> :
       <section className="tarkov-layout">
-        <aside className="raid-sidebar"><small>RIVAL SQUAD</small><div className={`ai-card ${ai.status === "搜索中" ? "active" : ""}`}><div><b>拾荒者小队</b><span>{enemyDefeated ? "已清除" : ai.status}</span></div><strong>{roomNames[roomIndex]}</strong><p>{activeRole("狙击手") || kit.tactical === "战术无人机" ? `${ai.searched}次搜索 · 背包估值¥${enemyLoot.reduce((sum, item) => sum + item.value, 0)}` : ai.signal}</p><i><em style={{ width: `${enemyDefeated ? 100 : Math.min(100, ai.searched / 7 * 100)}%` }} /></i></div>
-          <div className="live-odds"><small>本房间暴露规则</small><div><span>安全时间</span><b>{roomSafeTime(zone)}秒</b></div><div><span>超时基础遇敌</span><b>20%</b></div><div><span>概率增长</span><b className="amber">+1%/秒</b></div><div><span>检定间隔</span><b>3秒</b></div><div><span>敌队状态</span><b>{enemyDefeated ? "已清场" : `${enemyParty.filter(unit => unit.hp > 0).length}/3人可战`}</b></div></div>
+        <aside className="raid-sidebar"><small>RIVAL SQUADS · 2 TEAMS</small><div className={`ai-card ${ai.status === "搜索中" ? "active" : ""}`}><div><b>双队拾荒者编队</b><span>{enemyDefeated ? "全部清除" : `第${enemyWave}/2队 · ${ai.status}`}</span></div><strong>{roomNames[roomIndex]}</strong><p>{activeRole("狙击手") || kit.tactical === "战术无人机" ? `已击破${enemySquadsDefeated}/2队 · 当前${enemyParty.filter(unit => unit.hp > 0).length}人可战 · 战利品估值¥${enemyLoot.reduce((sum, item) => sum + item.value, 0)}` : ai.signal}</p><i><em style={{ width: `${enemyDefeated ? 100 : enemySquadsDefeated * 50 + Math.min(50, (3 - enemyParty.filter(unit => unit.hp > 0).length) / 3 * 50)}%` }} /></i></div>
+          <div className="live-odds"><small>本房间遭遇规则</small><div><span>安全时间</span><b>{roomSafeTime(zone)}秒</b></div><div><span>搜索伏击</span><b className="amber">5%/件</b></div><div><span>超时基础遇敌</span><b>20%</b></div><div><span>概率增长</span><b className="amber">+1%/秒</b></div><div><span>敌队进度</span><b>{enemyDefeated ? "2/2 已清场" : `${enemySquadsDefeated}/2击破 · 当前${enemyParty.filter(unit => unit.hp > 0).length}/3人`}</b></div></div>
           <div className="raid-kit"><small>全局技能均已生效</small>{rvStations.filter(station => activeRole(station.role)).map(station => <div key={station.role}><span>{station.role}</span><b>{station.skill}</b></div>)}{relationshipStations.filter(station => activeRelationshipRole(station.role)).map(station => <div className="relationship-support" key={station.role}><span>{station.role}</span><b>{station.skill}</b></div>)}</div>
         </aside>
         <section className="loot-field-panel"><div className="field-heading"><div><small>ROOM {roomIndex + 1}/5 · 10 × 10 · {zoneNames[zone]}</small><h2>{roomNames[roomIndex]}</h2></div><div><span>已搜 {searchedCount} 件 · 物资搜索 {Math.round(searchSeconds)} 秒</span><b>{safeRemaining > 0 ? `还可安全停留 ${safeRemaining} 秒` : enemyDefeated ? "敌队已清除，可自由搜索" : `已暴露 ${overtime} 秒 · 遇敌率 ${encounterChance}%`}</b></div></div>
@@ -1135,12 +1157,12 @@ export default function Home() {
         </section>
         <aside className="carry-panel"><div className="carry-section"><div className="bag-title"><div><small>SECURE CASE</small><h2>保险箱</h2></div><b>2×2</b></div><div className="secure-grid" onDragOver={event => event.preventDefault()} onDrop={() => moveLoot("safe")}><GridCells cols={2} rows={2} />{safeLoot.map(item => <button draggable onDragStart={() => startLootDrag(item.id, "safe")} onDragEnd={finishLootDrag} onClick={() => openRaidItem(item, "safe")} aria-label={`查看${item.name}详情`} className={`packed-object grade-${item.grade} ${item.w * item.h <= 2 ? "compact-object" : ""}`} style={{ gridColumn: `${item.px + 1} / span ${item.w}`, gridRow: `${item.py + 1} / span ${item.h}` }} key={item.id}><b>{item.name}</b><small>点击详情 · 必定带回</small></button>)}</div></div>
           <div className="carry-section"><div className="bag-title"><div><small>BACKPACK</small><h2>{kit.backpack}</h2></div><b>{packedBag.reduce((n, i) => n + i.w * i.h, 0)} / {bagCols * bagRows}</b></div><div className="strict-bag-grid" onDragOver={event => event.preventDefault()} onDrop={() => moveLoot("bag")} style={{ gridTemplateColumns: `repeat(${bagCols},1fr)`, gridTemplateRows: `repeat(${bagRows},1fr)`, aspectRatio: `${bagCols}/${bagRows}` }}><GridCells cols={bagCols} rows={bagRows} />{packedBag.map(item => <button draggable onDragStart={() => startLootDrag(item.id, "bag")} onDragEnd={finishLootDrag} onClick={() => openRaidItem(item, "bag")} aria-label={`查看${item.name}详情`} className={`packed-object grade-${item.grade} ${item.w * item.h <= 2 ? "compact-object" : ""}`} style={{ gridColumn: `${item.px + 1} / span ${item.w}`, gridRow: `${item.py + 1} / span ${item.h}` }} key={item.id}><b>{item.name}</b><small>{item.type === "食物" || item.type === "药品" ? "点击详情 · 可局内使用" : "点击详情 · 拖动整理"}</small></button>)}</div></div>
-          {enemyDefeated && <div className="enemy-spoils"><div className="bag-title"><div><small>CAPTURED LOADOUT</small><h2>敌方背包</h2></div><b>{enemyLoot.length}件</b></div><p>敌队装备和搜刮物已经全部展开。点击物品尝试装入自己的背包。</p><div>{enemyLoot.map(item => <button className={`grade-${item.grade}`} onClick={() => takeEnemyLoot(item)} key={item.id}><span>{gradeNames[item.grade]} · {item.type}</span><b>{item.name}</b><small>{item.w}×{item.h} · ¥{item.value.toLocaleString()}</small></button>)}{enemyLoot.length === 0 && <span>敌方背包已检索完毕</span>}</div></div>}
+          {enemyDefeated && <div className="enemy-spoils"><div className="bag-title"><div><small>CAPTURED LOADOUTS · 2 SQUADS</small><h2>双方敌队背包</h2></div><b>{enemyLoot.length}件</b></div><p>两支敌队全部击破，双方装备和搜刮物现已展开。点击物品尝试装入自己的背包。</p><div>{enemyLoot.map(item => <button className={`grade-${item.grade}`} onClick={() => takeEnemyLoot(item)} key={item.id}><span>{gradeNames[item.grade]} · {item.type}</span><b>{item.name}</b><small>{item.w}×{item.h} · ¥{item.value.toLocaleString()}</small></button>)}{enemyLoot.length === 0 && <span>双方敌队背包已检索完毕</span>}</div></div>}
           <div className="exit-routes"><small>EXTRACTION ROUTES</small><p className="extraction-rule">倒计时归零即成功；背包越满耗时越长，暴露状态下仍可能每3秒遇敌。</p><button onClick={() => startExtraction("原路撤离")}><b>原路撤离 · {extractionDuration("原路撤离")}秒</b><span>始终可用 · 距离长但条件稳定</span></button><button disabled={zone < 1 || !(kit.tactical === "烟雾弹" || activeRole("侦察员"))} onClick={() => startExtraction("维修通道")}><b>维修通道 · {extractionDuration("维修通道")}秒</b><span>内部起可用 · 需烟雾弹或侦察员</span></button><button disabled={zone < 2 || ![...packedBag, ...safeLoot].some(item => item.name === "红区安全卡")} onClick={() => startExtraction("封锁线车库")}><b>封锁线车库 · {extractionDuration("封锁线车库")}秒</b><span>核心限定 · 消耗红区安全卡</span></button></div>
         </aside>
       </section>}
     {selectedRaidItem && <LootArchiveDetail item={selectedRaidItem.item} collected onClose={() => setSelectedRaidItem(null)} actionLabel={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? "立即在局内使用" : selectedRaidItem.source === "field" ? undefined : `丢弃物品 · 腾出 ${selectedRaidItem.item.w * selectedRaidItem.item.h} 格`} onAction={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? useSelectedRaidItem : selectedRaidItem.source === "field" ? undefined : discardRaidItem} actionTone={selectedRaidItem.source !== "field" && !(selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品")) ? "danger" : "default"} secondaryActionLabel={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? "丢弃此物品" : undefined} onSecondaryAction={discardRaidItem} secondaryActionTone="danger" />}
-    {battle && <div className="modal-backdrop battle-layer"><section className="raid-battle-scene"><header><div><small>LIVE CONTACT · ROOM {roomIndex + 1}</small><h2>{roomNames[roomIndex]}交火</h2><p>每秒自动结算一轮攻击；弹药无限，行动前装备加成由三名队员共享。</p></div><div><span>脱离成功率</span><strong>{disengageChance}%</strong><button disabled={escapeCooldown > 0} onClick={attemptDisengage}>{escapeCooldown > 0 ? `${escapeCooldown}秒后可脱离` : "尝试脱离战斗"}</button></div></header><div className="combat-board"><section><div className="combat-side-title"><span>RV ACTION TEAM</span><b>{raidParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{raidParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section><div className="combat-center"><b>VS</b><span>自动交火</span><i /><small>敌我血量跨房间保留</small></div><section className="enemy-side"><div className="combat-side-title"><span>SCAVENGER SQUAD</span><b>{enemyParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{enemyParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section></div><div className="combat-log"><header><span>COMBAT FEED</span><b>失败脱离不会重置血量</b></header>{battleLogs.slice(0, 6).map((line, index) => <p className={index === 0 ? "latest" : ""} key={`${line}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span>{line}</p>)}</div></section></div>}
+    {battle && <div className="modal-backdrop battle-layer"><section className="raid-battle-scene"><header><div><small>LIVE CONTACT · ENEMY WAVE {enemyWave}/2 · ROOM {roomIndex + 1}</small><h2>{roomNames[roomIndex]}交火</h2><p>每秒自动结算一轮攻击；击破第一队不会回血，第二支强化小队会立即接战。</p></div><div><span>脱离成功率</span><strong>{disengageChance}%</strong><button disabled={escapeCooldown > 0} onClick={attemptDisengage}>{escapeCooldown > 0 ? `${escapeCooldown}秒后可脱离` : "尝试脱离战斗"}</button></div></header><div className="combat-board"><section><div className="combat-side-title"><span>RV ACTION TEAM</span><b>{raidParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{raidParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section><div className="combat-center"><b>VS</b><span>第 {enemyWave}/2 队</span><i /><small>敌我血量跨波次、跨房间保留</small></div><section className="enemy-side"><div className="combat-side-title"><span>SCAVENGER SQUAD · WAVE {enemyWave}</span><b>{enemyParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{enemyParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section></div><div className="combat-log"><header><span>COMBAT FEED</span><b>失败脱离不会重置血量</b></header>{battleLogs.slice(0, 6).map((line, index) => <p className={index === 0 ? "latest" : ""} key={`${line}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span>{line}</p>)}</div></section></div>}
     {extracting > 0 && <div className="modal-backdrop extracting-layer"><div className="extract-countdown"><small>{selectedExit}</small><strong>{extracting}</strong><h2>坚持到 0，撤离立即成功</h2><p>{escapeProtection > 0 ? `脱离保护剩余 ${escapeProtection} 秒，期间不会再次遇敌。` : safeRemaining > 0 || enemyDefeated ? "撤离正在安全窗口内执行，不会触发敌队拦截。" : `当前已暴露 ${overtime} 秒；倒计时期间仍会每3秒检定遇敌，一旦遭遇则撤离中断。`}</p><div><span>行动组生命 {Math.round(allyHpRatio * 100)}%</span><span>背包装载 {Math.round(bagLoadRatio * 100)}%</span><span>没有隐藏失败判定</span></div></div></div>}
   </main>;
 
