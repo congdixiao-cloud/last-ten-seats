@@ -361,12 +361,12 @@ function generateMarket(day: number): FieldLoot[] {
   return Array.from({ length: 10 }, (_, i) => { const grade = pickGrade(day * 101 + i * 23, 0, 1, true); const pool = fieldLootTemplates.filter(item => item.grade === grade); const template = pool[Math.floor(seeded(day * 191 + i * 37) * pool.length)] ?? fieldLootTemplates[0]; return { ...template, id: 800000 + day * 100 + i, x: 0, y: 0, revealed: true, moved: false, value: Math.ceil(template.value * 1.25) }; });
 }
 function enemyQuality(place: Place, seed: number): Quality {
-  const progress = (place.level - 1) / 9;
-  const skilled = 5.5 + progress * 8.5;
-  const elite = .45 + progress * 26.55;
-  const master = .049 + progress * progress * 37;
-  const legend = .001 + progress * progress * progress * 14;
-  const weights = [Math.max(5, 100 - skilled - elite - master - legend), skilled, elite, master, legend];
+  const baseProgress = (place.level - 1) / 9;
+  const locationSwing = (seeded(seed * .37 + 97) - .5) * .24;
+  const progress = Math.max(0, Math.min(1, baseProgress + locationSwing));
+  const low = [82, 12, 4.5, 1.3, .2];
+  const high = [6, 12, 24, 36, 22];
+  const weights = low.map((value, index) => value + (high[index] - value) * progress);
   const roll = seeded(seed) * weights.reduce((sum, value) => sum + value, 0); let cursor = 0;
   for (let index = 0; index < weights.length; index++) { cursor += weights[index]; if (roll <= cursor) return catalogQualities[index]; }
   return "普通";
@@ -386,10 +386,13 @@ function generateEnemyParty(place: Place, day: number, raidSeed: number, wave = 
     const pool = exact.length ? exact : fallback;
     const person = pool[Math.floor(seeded(raidSeed * .31 + wave * 269 + place.id * 71 + day * 43 + index * 137) * pool.length)] ?? allPersonnelCatalog[0];
     chosen.add(person.name);
-    const attack = Math.round((person.attack + place.level * 2.5) * attackMultiplier + veteranBonus + (wave === 2 ? 15 : 0));
-    const defense = Math.round((person.defense + place.level * 2.5) * defenseMultiplier + veteranBonus * .8 + (wave === 2 ? 12 : 0));
+    const outlier = seeded(raidSeed * .67 + wave * 463 + place.id * 229 + day * 107 + index * 613) < .08;
+    const attackVariance = .82 + seeded(raidSeed * .79 + wave * 331 + place.id * 163 + day * 89 + index * 479) * .48 + (outlier ? .2 : 0);
+    const defenseVariance = .84 + seeded(raidSeed * .91 + wave * 277 + place.id * 197 + day * 113 + index * 541) * .42 + (outlier ? .14 : 0);
+    const attack = Math.round(((person.attack + place.level * 2.5) * attackMultiplier + veteranBonus + (wave === 2 ? 15 : 0)) * attackVariance);
+    const defense = Math.round(((person.defense + place.level * 2.5) * defenseMultiplier + veteranBonus * .8 + (wave === 2 ? 12 : 0)) * defenseVariance);
     const maxHp = Math.round(90 + defense * .75 + place.level * 5 + veteranBonus * 1.4 + (wave === 2 ? 24 : 0));
-    return { id: -(wave * 100000 + place.id * 1000 + day * 10 + index + 1), name: person.name, role: `第${wave}队 · ${person.quality} · ${person.role}`, attack, defense, maxHp, hp: maxHp };
+    return { id: -(wave * 100000 + place.id * 1000 + day * 10 + index + 1), name: person.name, role: `第${wave}队 · ${person.quality} · ${person.role}${outlier ? " · 精锐" : ""}`, attack, defense, maxHp, hp: maxHp };
   });
 }
 function generateEnemyLoot(place: Place, day: number, wave = 1): PackedLoot[] {
@@ -592,6 +595,7 @@ export default function Home() {
   const [enemyWave, setEnemyWave] = useState(1);
   const [escapeCooldown, setEscapeCooldown] = useState(0);
   const [battleLogs, setBattleLogs] = useState<string[]>([]);
+  const [ambushWarning, setAmbushWarning] = useState<{ itemName: string; trigger: string } | null>(null);
   const [extracting, setExtracting] = useState(0);
   const [selectedExit, setSelectedExit] = useState<ExitId>("原路撤离");
   const [roundOutcome, setRoundOutcome] = useState<string[]>([]);
@@ -707,7 +711,7 @@ export default function Home() {
       setCompanionUnlocked(state.companionUnlocked); setRelationshipContacts(state.relationshipContacts); setExclusiveLoadout(state.exclusiveLoadout);
       setEquipmentStash(state.equipmentStash); setSurvivalStash(state.survivalStash); setObjectStash(restoredObjectStash); setInstalled(state.installed);
       setMiningProgress(state.miningProgress); setCoins(state.coins); setMarketOffers(state.marketOffers); setSeenItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.seenItems, "绯红邀约终端"])) : state.seenItems); setCollectedItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.collectedItems, "绯红邀约终端"])) : state.collectedItems);
-      setSearchingId(null); setSearchProgress(0); setDraggedLoot(null); setBattle(false); setExtracting(0); setSelectedRaidItem(null);
+      setSearchingId(null); setSearchProgress(0); setDraggedLoot(null); setBattle(false); setAmbushWarning(null); setExtracting(0); setSelectedRaidItem(null);
     } catch {
       // 损坏或旧格式的存档不会阻止游戏启动；下一次有效状态变化会覆盖它。
       startFreshGame();
@@ -768,10 +772,20 @@ export default function Home() {
         if (found) { setRelationshipCandidate(found); setLogs(prev => [`极罕见邂逅：无线电里传来一段私人频道邀请，署名「${found.name}」。`, ...prev].slice(0, 6)); }
       }
       const lootAmbush = seeded(raidSeed * 1.37 + item.id * 2.11 + nextSearch * 193) < .05;
-      if (!enemyDefeated && lootAmbush) beginCombat(`物资伏击：打开「${item.name}」时，藏在容器后的敌人突然开火。`);
+      if (!enemyDefeated && lootAmbush) warnLootAmbush(item.name);
     }, 80);
     return () => window.clearInterval(timer);
   }, [searchingId]);
+
+  useEffect(() => {
+    if (!ambushWarning) return;
+    const timer = window.setTimeout(() => {
+      const trigger = ambushWarning.trigger;
+      setAmbushWarning(null);
+      beginCombat(trigger);
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [ambushWarning]);
 
   useEffect(() => {
     if (extracting <= 0) return;
@@ -780,7 +794,7 @@ export default function Home() {
   }, [extracting]);
 
   useEffect(() => {
-    if (mode !== "explore" || !activePlace || battle || enemyDefeated) return;
+    if (mode !== "explore" || !activePlace || battle || ambushWarning || enemyDefeated) return;
     const timer = window.setTimeout(() => {
       // The final countdown second is the finish line, not another hidden failure roll.
       if (extracting === 1) return;
@@ -795,7 +809,7 @@ export default function Home() {
       }
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [mode, activePlace, battle, enemyDefeated, safeRemaining, overtime, escapeProtection, extracting]);
+  }, [mode, activePlace, battle, ambushWarning, enemyDefeated, safeRemaining, overtime, escapeProtection, extracting]);
 
   useEffect(() => {
     if (!battle) return;
@@ -860,10 +874,18 @@ export default function Home() {
     if (battle || enemyDefeated || !enemyParty.some(unit => unit.hp > 0)) return;
     const interruptedExit = extracting > 0 ? `${selectedExit}倒计时剩余${extracting}秒时被敌队截停。` : null;
     const encounterLog = interruptedExit ?? trigger ?? `暴露检定触发：第${enemyWave}支拾荒者小队在${roomNames[roomIndex]}发现了你们。`;
-    setExtracting(0); setSearchingId(null); setSearchProgress(0); setSelectedRaidItem(null); setBattle(true); setEscapeCooldown(5);
+    setExtracting(0); setSearchingId(null); setSearchProgress(0); setSelectedRaidItem(null); setAmbushWarning(null); setBattle(true); setEscapeCooldown(5);
     setBattleLogs([encounterLog]);
     if (interruptedExit) setRoundOutcome(prev => [interruptedExit, ...prev]);
     setLogs(prev => [encounterLog, `遭遇第${enemyWave}/2支敌方三人小队；双方生命会保留到下一次接触。`, ...prev].slice(0, 6));
+  }
+
+  function warnLootAmbush(itemName: string) {
+    if (battle || ambushWarning || enemyDefeated || !enemyParty.some(unit => unit.hp > 0)) return;
+    const trigger = `物资伏击：搜索「${itemName}」时发现敌人，短暂警戒后双方开火。`;
+    setExtracting(0); setSelectedRaidItem(null); setAmbushWarning({ itemName, trigger });
+    setAi(prev => ({ ...prev, status: "搜索中", signal: `「${itemName}」附近侦测到敌方活动` }));
+    setLogs(prev => [`危险信号：搜索「${itemName}」时发现近距离敌人，2秒后进入战斗。`, ...prev].slice(0, 6));
   }
 
   function resolveBattleVictory() {
@@ -922,14 +944,14 @@ export default function Home() {
 
   function confirmPreparation() {
     if (expedition.length !== 3) return;
-    setMode("explore"); setRaidSeed(Math.floor(Math.random() * 1_000_000_000)); setActivePlace(null); setZone(0); setRoomIndex(0); setSafeRemaining(0); setOvertime(0); setEscapeProtection(0); setRisk(6); setPackedBag([]); setSafeLoot([]); setFieldLoot([]); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setRaidParty(buildRaidParty()); setEnemyParty([]); setEnemyLoot([]); setEnemyDefeated(false); setEnemyWave(1); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
+    setMode("explore"); setRaidSeed(Math.floor(Math.random() * 1_000_000_000)); setActivePlace(null); setZone(0); setRoomIndex(0); setSafeRemaining(0); setOvertime(0); setEscapeProtection(0); setRisk(6); setPackedBag([]); setSafeLoot([]); setFieldLoot([]); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setAmbushWarning(null); setRaidParty(buildRaidParty()); setEnemyParty([]); setEnemyLoot([]); setEnemyDefeated(false); setEnemyWave(1); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
     setAi({ zone: 0, searched: 0, value: 0, status: "搜索中", signal: "无线电捕捉到两支队伍交替通联" });
     setLogs(["装备检查完毕，三人行动组离开房车；其余成员在后方提供职业支援。"]);
   }
   function toggleExpedition(id: number) { setExpedition(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 3 ? [...prev, id] : prev); }
   function enterPlace(place: Place) { if (place.id > 1 && (locationEscapes[place.id - 1] ?? 0) < 2) return; const firstSafe = roomSafeTime(0, place); setActivePlace(place); setRoomIndex(0); setZone(0); setSafeRemaining(firstSafe); setOvertime(0); setFieldLoot(generateField(place.id, day, 0, raidSeed, 0)); setRaidParty(current => current.length ? current : buildRaidParty()); setEnemyWave(1); setEnemyParty(generateEnemyParty(place, day, raidSeed, 1)); setEnemyLoot(generateEnemyLoot(place, day, 1)); setEnemyDefeated(false); setRisk(Math.min(95, 5 + place.level * 4)); setLogs([`进入${place.name}·${roomNames[0]}。本局存在2支敌队；安全搜索时间 ${firstSafe} 秒，每件物资另有5%伏击概率。`]); }
-  function advanceRoom() { if (!activePlace || roomIndex >= roomZones.length - 1 || searchingId !== null || battle) return; enterRoom(roomIndex + 1); }
-  function beginSearch(id: number) { const item = fieldLoot.find(entry => entry.id === id); if (!item || item.revealed || item.moved || searchingId !== null || battle || extracting > 0) return; setSearchingId(id); setLogs(prev => [`正在辨认一个 ${item.w}×${item.h} 的未知物品……`, ...prev].slice(0, 6)); }
+  function advanceRoom() { if (!activePlace || roomIndex >= roomZones.length - 1 || searchingId !== null || battle || ambushWarning) return; enterRoom(roomIndex + 1); }
+  function beginSearch(id: number) { const item = fieldLoot.find(entry => entry.id === id); if (!item || item.revealed || item.moved || searchingId !== null || battle || ambushWarning || extracting > 0) return; setSearchingId(id); setLogs(prev => [`正在辨认一个 ${item.w}×${item.h} 的未知物品……`, ...prev].slice(0, 6)); }
 
   function moveLoot(target: "bag" | "safe") {
     if (!draggedLoot) return;
@@ -1005,7 +1027,7 @@ export default function Home() {
     setExtracting(0);
     if (selectedExit === "封锁线车库") { const card = [...packedBag, ...safeLoot].find(item => item.name === "红区安全卡"); if (card) { setPackedBag(prev => repack(prev.filter(item => item.id !== card.id), bagCols, bagRows)); setSafeLoot(prev => repack(prev.filter(item => item.id !== card.id), 2, 2)); } }
     setRoundOutcome(prev => [`${selectedExit}倒计时完成：行动组成功撤离`, ...prev]);
-    setMode("result"); setBattle(false);
+    setMode("result"); setBattle(false); setAmbushWarning(null);
   }
 
   function storeReturned(items: PackedLoot[]) {
@@ -1164,6 +1186,7 @@ export default function Home() {
         </aside>
       </section>}
     {selectedRaidItem && <LootArchiveDetail item={selectedRaidItem.item} collected onClose={() => setSelectedRaidItem(null)} actionLabel={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? "立即在局内使用" : selectedRaidItem.source === "field" ? undefined : `丢弃物品 · 腾出 ${selectedRaidItem.item.w * selectedRaidItem.item.h} 格`} onAction={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? useSelectedRaidItem : selectedRaidItem.source === "field" ? undefined : discardRaidItem} actionTone={selectedRaidItem.source !== "field" && !(selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品")) ? "danger" : "default"} secondaryActionLabel={selectedRaidItem.source === "bag" && (selectedRaidItem.item.type === "食物" || selectedRaidItem.item.type === "药品") ? "丢弃此物品" : undefined} onSecondaryAction={discardRaidItem} secondaryActionTone="danger" />}
+    {ambushWarning && <div className="modal-backdrop ambush-warning-layer" role="alert" aria-live="assertive"><section className="ambush-warning-card"><div className="ambush-radar"><i /><i /><i /><span>!</span></div><small>UNEXPECTED CONTACT · LOOT AMBUSH</small><h2>搜刮点里藏着敌人</h2><p>搜索「{ambushWarning.itemName}」时侦测到近距离活动，小队正在举枪警戒。</p><div className="ambush-scan"><span>威胁确认中</span><b>2 SEC</b><i><em /></i></div><footer><span>区域计时已暂停</span><strong>即将进入战斗</strong></footer></section></div>}
     {battle && <div className="modal-backdrop battle-layer"><section className="raid-battle-scene"><header><div><small>LIVE CONTACT · ENEMY WAVE {enemyWave}/2 · ROOM {roomIndex + 1}</small><h2>{roomNames[roomIndex]}交火</h2><p>每秒自动结算一轮攻击；击破本队后返回搜刮场景，另一队只会在后续遇敌检定命中时出现。</p></div><div><span>脱离成功率</span><strong>{disengageChance}%</strong><button disabled={escapeCooldown > 0} onClick={attemptDisengage}>{escapeCooldown > 0 ? `${escapeCooldown}秒后可脱离` : "尝试脱离战斗"}</button></div></header><div className="combat-board"><section><div className="combat-side-title"><span>RV ACTION TEAM</span><b>{raidParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{raidParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section><div className="combat-center"><b>VS</b><span>第 {enemyWave}/2 队</span><i /><small>血量跨遭遇与跨房间保留</small></div><section className="enemy-side"><div className="combat-side-title"><span>SCAVENGER SQUAD · WAVE {enemyWave}</span><b>{enemyParty.filter(unit => unit.hp > 0).length}/3 可战</b></div>{enemyParty.map(unit => <article className={unit.hp === 0 ? "downed" : ""} key={unit.id}><div><span>{unit.role}</span><b>{unit.name}</b></div><strong>{unit.hp}<small>/{unit.maxHp}</small></strong><i><em style={{ width: `${unit.hp / unit.maxHp * 100}%` }} /></i><footer><span>战斗 {unit.attack}</span><span>防御 {unit.defense}</span></footer></article>)}</section></div><div className="combat-log"><header><span>COMBAT FEED</span><b>失败脱离不会重置血量</b></header>{battleLogs.slice(0, 6).map((line, index) => <p className={index === 0 ? "latest" : ""} key={`${line}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span>{line}</p>)}</div></section></div>}
     {extracting > 0 && <div className="modal-backdrop extracting-layer"><div className="extract-countdown"><small>{selectedExit}</small><strong>{extracting}</strong><h2>坚持到 0，撤离立即成功</h2><p>{escapeProtection > 0 ? `脱离保护剩余 ${escapeProtection} 秒，期间不会再次遇敌。` : safeRemaining > 0 || enemyDefeated ? "撤离正在安全窗口内执行，不会触发敌队拦截。" : `当前已暴露 ${overtime} 秒；倒计时期间仍会每3秒检定遇敌，一旦遭遇则撤离中断。`}</p><div><span>行动组生命 {Math.round(allyHpRatio * 100)}%</span><span>背包装载 {Math.round(bagLoadRatio * 100)}%</span><span>没有隐藏失败判定</span></div></div></div>}
   </main>;
