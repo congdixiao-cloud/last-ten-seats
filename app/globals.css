@@ -217,3 +217,14 @@ body{line-height:1.5;text-size-adjust:100%;-webkit-text-size-adjust:100%}button,
 .field-grid-10>i,.secure-grid>i,.strict-bag-grid>i,.stash-grid>i{display:block!important;min-width:0;min-height:0;position:relative;z-index:0;border-right:1px solid #303531;border-bottom:1px solid #303531;pointer-events:none}
 .field-grid-10>i,.stash-grid>i{border-color:#2a2e2c}
 .exit-routes .extraction-rule{margin:4px 0 10px;color:#aab2ad;font-size:13px;line-height:1.55}
+.location-card.locked{cursor:not-allowed;filter:saturate(.25);opacity:.58;background:linear-gradient(150deg,#181a19,#101111)}
+.location-card.locked:hover{transform:none;border-color:#343936}.location-card.locked h3:before{content:"◇";margin-right:7px;color:#727974}
+.location-clearance{position:absolute;left:16px;right:16px;bottom:39px;height:22px;border-bottom:2px solid #2b312d}
+.location-clearance i{position:absolute;left:0;bottom:-2px;height:2px;background:var(--acid);transition:width .25s}.location-clearance small{position:absolute;left:0;bottom:5px;color:#7f8982;font-size:12px}
+.location-card>p{margin-bottom:58px}.location-card>b{bottom:14px}.location-card.locked .location-clearance i{background:#6d7470}
+.card-combat-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}.card-combat-stats span{display:flex;align-items:center;justify-content:space-between;min-height:39px;padding:8px 10px;border:1px solid #ffffff12;border-radius:9px;background:linear-gradient(135deg,#171b18,#0b0d0c)}
+.card-combat-stats small{color:#8a938d;font-size:12px}.card-combat-stats b{color:var(--card-accent);font-size:17px}.combat-attack b{color:#ff806e}.combat-defense b{color:#78bff1}
+.dismiss-personnel{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-top:18px;padding:16px;border:1px solid #633a38;border-radius:12px;background:linear-gradient(135deg,#211514,#101111)}
+.dismiss-personnel>div{min-width:0}.dismiss-personnel small,.dismiss-personnel b{display:block}.dismiss-personnel small{color:#d16b63;font-size:12px;letter-spacing:.12em}.dismiss-personnel b{margin-top:4px;font-size:14px}.dismiss-personnel p{max-width:470px;margin:6px 0 0;color:#9a8986;font-size:12px;line-height:1.55}
+.dismiss-personnel button{flex:0 0 auto;min-height:44px;padding:10px 15px;border:1px solid #7b413d;border-radius:9px;background:#2a1716;color:#ef8a81;font-weight:800;cursor:pointer}.dismiss-personnel button.armed{background:#b23e35;color:#fff}.dismiss-personnel button:disabled{cursor:not-allowed;opacity:.45}
+@media(max-width:680px){.dismiss-personnel{align-items:stretch;flex-direction:column}.dismiss-personnel button{width:100%}}
