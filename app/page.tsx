@@ -28,7 +28,7 @@ type AiSquad = { zone: number; searched: number; value: number; status: "搜索�
 type CombatUnit = { id: number; name: string; role: string; attack: number; defense: number; maxHp: number; hp: number };
 
 type GameSave = {
-  version: 1;
+  version: 1 | 2;
   savedAt: number;
   state: {
     tab: Tab; mode: GameMode; day: number; crew: Crew[]; selectedCrew: number; expedition: number[]; seatAssignments: (number | null)[];
@@ -402,6 +402,10 @@ function firstFit(items: PackedLoot[], w: number, h: number, cols: number, rows:
   return null;
 }
 function repack(items: PackedLoot[], cols = 10, rows = 24) { const packed: PackedLoot[] = []; items.forEach(item => { const fit = firstFit(packed, item.w, item.h, cols, rows); if (fit) packed.push({ ...item, ...fit }); }); return packed; }
+function createStarterCrimsonTerminal(): PackedLoot {
+  const template = fieldLootTemplates.find(item => item.name === "绯红邀约终端")!;
+  return { ...template, id: 990000001, x: 0, y: 0, revealed: true, moved: true, px: 0, py: 0 };
+}
 function storeKind(item: Loot): StoreKind { return item.type === "食物" || item.type === "药品" ? "冰箱" : item.type === "装备" || item.type === "弹药" || item.type === "专属" ? "装备柜" : "存储柜"; }
 function hardwareKind(name: string): HardwareKind | null { return name.startsWith("CPU") ? "CPU" : name.startsWith("GPU") ? "GPU" : name.startsWith("内存") ? "内存" : null; }
 function purpose(item: Loot) { if (item.name === "绯红邀约终端") return "成功撤离后启用，永久解锁房车「伴侣」板块"; if (item.type === "食物") return "局内应急 / 房车补充饱食度"; if (item.type === "药品") return "局内救治 / 房车恢复健康"; if (item.type === "装备") return "配置出战装备，为三人行动组提供共享增益"; if (item.type === "专属") return `仅限${item.exclusiveFor}装备 · ${item.bonus}`; if (item.type === "弹药") return "军用贸易物资；战斗不再消耗弹药"; if (item.type === "零件") return "提交房车主线修复"; if (item.type === "奢侈品") return "高价出售换取货币"; if (item.type === "电脑") return "安装至电脑，持续产出矿币"; if (item.type === "钥匙") return "开启核心区密室或特殊撤离"; return "消耗后触发特殊系统"; }
@@ -668,13 +672,18 @@ export default function Home() {
       setSelectedCrew(startingCrew[0]?.id ?? 0);
       setExpedition(startingCrew.map(person => person.id));
       setSeatAssignments(assignCrewToStations(startingCrew));
+      setObjectStash([createStarterCrimsonTerminal()]);
+      setSeenItems(["绯红邀约终端"]);
+      setCollectedItems(["绯红邀约终端"]);
     };
     try {
       const raw = window.localStorage.getItem(LOCAL_SAVE_KEY);
       if (!raw) { startFreshGame(); return; }
       const saved = JSON.parse(raw) as GameSave;
-      if (saved.version !== 1 || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) { startFreshGame(); return; }
+      if (![1, 2].includes(saved.version) || !saved.state || !Array.isArray(saved.state.crew) || !Number.isFinite(saved.state.day)) { startFreshGame(); return; }
       const state = saved.state;
+      const shouldGrantLegacyStarter = saved.version === 1 && !state.companionUnlocked && !state.objectStash.some(item => item.name === "绯红邀约终端");
+      const restoredObjectStash = shouldGrantLegacyStarter ? repack([...state.objectStash, createStarterCrimsonTerminal()]) : state.objectStash;
       const restoredCrew = state.crew.map((person, index) => normalizeCrewCombat(person, index));
       setTab(state.tab); setMode(state.mode); setDay(state.day); setCrew(restoredCrew); setSelectedCrew(state.selectedCrew);
       setExpedition(state.expedition); setSeatAssignments(state.seatAssignments); setSatiety(state.satiety); setTeamHealth(state.teamHealth);
@@ -685,8 +694,8 @@ export default function Home() {
       setAi(state.ai); setSelectedExit(state.selectedExit); setRoundOutcome(state.roundOutcome); setSurvivorCandidates((state.survivorCandidates ?? []).map((person, index) => normalizeCrewCombat(person, index))); setRaidParty(state.raidParty ?? []); setEnemyParty(state.enemyParty ?? []); setEnemyLoot(state.enemyLoot ?? []); setEnemyDefeated(state.enemyDefeated ?? false); setBattleLogs(state.battleLogs ?? []);
       setRelationshipRoster(state.relationshipRoster); setRelationshipCandidate(state.relationshipCandidate); setRelationshipAssignments(state.relationshipAssignments);
       setCompanionUnlocked(state.companionUnlocked); setRelationshipContacts(state.relationshipContacts); setExclusiveLoadout(state.exclusiveLoadout);
-      setEquipmentStash(state.equipmentStash); setSurvivalStash(state.survivalStash); setObjectStash(state.objectStash); setInstalled(state.installed);
-      setMiningProgress(state.miningProgress); setCoins(state.coins); setMarketOffers(state.marketOffers); setSeenItems(state.seenItems); setCollectedItems(state.collectedItems);
+      setEquipmentStash(state.equipmentStash); setSurvivalStash(state.survivalStash); setObjectStash(restoredObjectStash); setInstalled(state.installed);
+      setMiningProgress(state.miningProgress); setCoins(state.coins); setMarketOffers(state.marketOffers); setSeenItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.seenItems, "绯红邀约终端"])) : state.seenItems); setCollectedItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.collectedItems, "绯红邀约终端"])) : state.collectedItems);
       setSearchingId(null); setSearchProgress(0); setDraggedLoot(null); setBattle(false); setExtracting(0); setSelectedRaidItem(null);
     } catch {
       // 损坏或旧格式的存档不会阻止游戏启动；下一次有效状态变化会覆盖它。
@@ -699,7 +708,7 @@ export default function Home() {
   useEffect(() => {
     if (!saveReady) return;
     const save: GameSave = {
-      version: 1,
+      version: 2,
       savedAt: Date.now(),
       state: {
         tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment,
