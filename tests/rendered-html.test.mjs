@@ -19,6 +19,12 @@ test("renders the Last Ten Seats survival game", async () => {
   assert.match(html, /感染区撤离/);
   assert.match(html, /全队饱食度/);
   assert.match(html, /房车修复/);
+  assert.match(html, /常驻委托 · 物资搜索/);
+  assert.match(html, /PERMANENT CONTRACT BOARD · 10 CATEGORIES/);
+  assert.match(html, /完成目标后手动确认/);
+  assert.match(html, /需要「精密传动组件」/);
+  assert.doesNotMatch(html, /今日委托/);
+  assert.doesNotMatch(html, />零件\s*<b>/);
   assert.match(html, /配置下一次行动/);
   assert.match(html, />黑市<\/button>/);
   assert.match(html, />物资图鉴<\/button>/);

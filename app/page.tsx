@@ -27,6 +27,12 @@ type Kit = Record<KitSlot, string>;
 type GearOption = { name: string; note: string; stat: number; grade: number; cols?: number; rows?: number };
 type AiSquad = { zone: number; searched: number; value: number; status: "搜索中" | "撤离中" | "已撤离" | "被击退"; signal: string };
 type CombatUnit = { id: number; name: string; role: string; attack: number; defense: number; maxHp: number; hp: number };
+type ContractMetric = "searched" | "extractions" | "squads" | "coreSearches" | "recoverFood" | "recoverEquipment" | "rareRecovered" | "repairs" | "suppliesUsed" | "recruits" | "submitted";
+type ContractReward = { kind: "currency" | "coins" | "item" | "equipment" | "supplies"; label: string; amount?: number; itemName?: string };
+type ContractDefinition = { id: string; category: string; title: string; description: string; metric: ContractMetric; target: number; icon: string; rewards: ContractReward[]; submitItemName?: string; mystery?: boolean };
+type MaterialRequest = { name: string; quantity: number; grade: number };
+type ReplacementSource = "recruit" | "ending";
+type RelationshipArtMode = "regular" | "allure";
 
 type GameSave = {
   version: 1 | 2 | 3;
@@ -36,17 +42,20 @@ type GameSave = {
     satiety: number; teamHealth: number; resources: { 弹药: number; 零件: number; 货币: number };
     repair: { 发动机: number; 传动系统: number; 密封系统: number; 导航系统: number; 冷却系统: number };
     upgrades: { 床位: number; 仓库: number; 医疗站: number; 工作台: number; 侦察台: number; 武器站: number };
-    kit: Kit; ownedEquipment: string[]; activePlace: Place | null; raidSeed: number; zone: number; roomIndex?: number; safeRemaining?: number; overtime?: number; escapeProtection?: number; fieldLoot: FieldLoot[]; risk: number;
+    kit: Kit; ownedEquipment: string[]; plannedPlaceId?: number; activePlace: Place | null; raidSeed: number; zone: number; roomIndex?: number; safeRemaining?: number; overtime?: number; escapeProtection?: number; fieldLoot: FieldLoot[]; risk: number;
     logs: string[]; searchedCount: number; searchSeconds: number; packedBag: PackedLoot[]; safeLoot: PackedLoot[]; ai: AiSquad;
     selectedExit: ExitId; roundOutcome: string[]; survivorCandidates: Crew[]; raidParty?: CombatUnit[]; enemyParty?: CombatUnit[]; enemyLoot?: PackedLoot[]; enemyDefeated?: boolean; enemyWave?: number; battleLogs?: string[]; locationEscapes?: Record<number, number>; relationshipRoster: Relationship[];
     relationshipCandidate: Relationship | null; relationshipAssignments: (number | null)[]; companionUnlocked: boolean; relationshipContacts: number;
     exclusiveLoadout: Record<number, PackedLoot>; equipmentStash: PackedLoot[]; survivalStash: PackedLoot[]; objectStash: PackedLoot[];
     installed: Record<HardwareKind, PackedLoot[]>; miningProgress: number; coins: number; marketOffers: FieldLoot[]; seenItems: string[]; collectedItems: string[];
+    contractMainIndex?: number; mysteryContractId?: string | null; contractProgress?: number; contractCompletionNote?: string;
+    companionTradeRequirements?: MaterialRequest[]; companionTradeCycle?: number; companionTradeNextRefreshDay?: number;
+    endingUnlocked?: boolean; endingLegendaryCandidates?: Crew[]; endingCompanionCandidates?: Relationship[]; endingLegendaryClaimed?: boolean; endingCompanionClaimed?: boolean;
   };
 };
 
 const LOCAL_SAVE_KEY = "last-ten-seats-local-save-v1";
-const RELATIONSHIP_CONTACT_PRICE = 30000;
+const CASH_RESCUE_PRICE = 10000;
 
 const initialCrew: Crew[] = [
   { id: 1, name: "林默", role: "侦察员", subRole: "军需官", score: 71, attack: 10, defense: 16, quality: "熟练", stamina: 100, health: "健康", trait: "路径预判：区域推进风险 -4", flaw: "正面交战 -8%", potential: 86, story: personnelProfiles.find(person => person.name === "林默")!.story, gear: { 武器: "旧式弩", 防具: "轻便夹克", 头盔: "无", 背包: "登山包", 特殊: "望远镜" } },
@@ -55,14 +64,14 @@ const initialCrew: Crew[] = [
 ];
 
 const reserveCrew: Crew[] = [
-  { id: 40, name: "韩拓", role: "机械师", subRole: "黑市联络员", score: 77, attack: 54, defense: 68, quality: "精英", stamina: 82, health: "轻伤", trait: "拆解专家：提交零件收益 +2", flaw: "每日额外消耗饱食度", potential: 84, story: personnelProfiles.find(person => person.name === "韩拓")!.story, gear: { 武器: "钉枪", 防具: "维修服", 头盔: "焊工面罩", 背包: "工具袋", 特殊: "万能扳手" } },
+  { id: 40, name: "韩拓", role: "机械师", subRole: "黑市联络员", score: 77, attack: 54, defense: 68, quality: "精英", stamina: 82, health: "轻伤", trait: "维修诊断：提前标记房车所需物资", flaw: "每日额外消耗饱食度", potential: 84, story: personnelProfiles.find(person => person.name === "韩拓")!.story, gear: { 武器: "钉枪", 防具: "维修服", 头盔: "焊工面罩", 背包: "工具袋", 特殊: "万能扳手" } },
   { id: 50, name: "闻岚", role: "狙击手", subRole: "搜救队长", score: 82, attack: 101, defense: 45, quality: "名家", stamina: 75, health: "健康", trait: "静默警戒：更早发现AI队伍", flaw: "弹药消耗 +1", potential: 88, story: personnelProfiles.find(person => person.name === "闻岚")!.story, gear: { 武器: "猎鹿步枪", 防具: "伪装披风", 头盔: "护目镜", 背包: "轻型背囊", 特殊: "测距仪" } },
 ];
 
 const rvStations = [
   { label: "指挥台", role: "指挥官", skill: "全队遭遇成功率 +6%" }, { label: "侦察席", role: "侦察员", skill: "推进与搜索风险降低" },
   { label: "突击席", role: "突击手", skill: "强攻成功率 +8%" }, { label: "狙击席", role: "狙击手", skill: "提前显示AI队伍动向" },
-  { label: "医疗台", role: "医疗员", skill: "每回合恢复小队健康" }, { label: "维修台", role: "机械师", skill: "主线零件修复收益提升" },
+  { label: "医疗台", role: "医疗员", skill: "每回合恢复小队健康" }, { label: "维修台", role: "机械师", skill: "标记下一项房车修复需求" },
   { label: "厨房", role: "厨师", skill: "每回合额外恢复饱食度" }, { label: "军需席", role: "军需官", skill: "背包纵向增加一格" },
   { label: "暗网终端", role: "黑市联络员", skill: "开启两回合刷新的黑市" }, { label: "搜救电台", role: "搜救队长", skill: "消耗搜救仪定向招聘" },
 ];
@@ -82,8 +91,55 @@ const locations: Place[] = [
   { id: 7, level: 7, name: "地下科研站", risk: "高", hint: "电脑设备与实验物资丰富，名家敌人明显增加", accent: "high" },
   { id: 8, level: 8, name: "黑潮军械库", risk: "极高", hint: "高阶武器集中，但每次遇敌都可能是硬仗", accent: "extreme" },
   { id: 9, level: 9, name: "红区物流枢纽", risk: "极高", hint: "金色物资开始稳定出现，传奇敌人可能带队", accent: "extreme" },
-  { id: 10, level: 10, name: "零号撤离机场", risk: "终局", hint: "感染区最深处，高价值与最高强度同时存在", accent: "extreme" },
+  { id: 10, level: 10, name: "零号撤离机场", risk: "致命", hint: "废弃跑道横跨红区，高价值空投与重装敌队同时出现", accent: "extreme" },
+  { id: 11, level: 11, name: "沉没化工区", risk: "灾难", hint: "被污染洪水吞没的工业区，红色设备与特殊物资埋在深水厂房", accent: "extreme" },
+  { id: 12, level: 12, name: "群峰广播站", risk: "终局", hint: "封锁线外最后仍在发射信号的高山设施，也是撤离路线的最终坐标", accent: "extreme" },
 ];
+
+const mapMarkerPositions = [
+  { left: 10, top: 88 }, { left: 38, top: 82 }, { left: 70, top: 88 }, { left: 87, top: 65 },
+  { left: 58, top: 61 }, { left: 26, top: 62 }, { left: 12, top: 38 }, { left: 42, top: 34 },
+  { left: 74, top: 40 }, { left: 22, top: 12 }, { left: 55, top: 10 }, { left: 88, top: 15 },
+];
+
+type ContractBlueprint = {
+  category: string; title: string; metric: ContractMetric; icon: string;
+  target: (tier: number) => number;
+  description: (tier: number, target: number, submitItem?: string) => string;
+  rewards: (tier: number) => ContractReward[];
+  submitItemName?: (tier: number) => string;
+};
+
+const contractBlueprints: ContractBlueprint[] = [
+  { category: "物资搜索", title: "废墟清点", metric: "searched", icon: "搜", target: tier => 3 + tier * 3, description: (_tier, target) => `在任意房间完成 ${target} 次物资搜索。`, rewards: tier => [{ kind: "currency", label: `货币 ¥${500 + tier * 500}`, amount: 500 + tier * 500 }] },
+  { category: "安全撤离", title: "把人带回来", metric: "extractions", icon: "撤", target: tier => 1 + Math.floor(tier / 2), description: (_tier, target) => `携带任意战利品成功撤离 ${target} 次。`, rewards: tier => [{ kind: "supplies", label: tier ? "外科手术包" : "救灾口粮", itemName: tier ? "外科手术包" : "救灾口粮" }] },
+  { category: "生存回收", title: "补满冰箱", metric: "recoverFood", icon: "粮", target: tier => 2 + tier * 2, description: (_tier, target) => `成功撤离并带回 ${target} 件食物。`, rewards: tier => [{ kind: "item", label: tier ? "精密传动组件" : "通用机械零件", itemName: tier ? "精密传动组件" : "通用机械零件" }] },
+  { category: "补给使用", title: "先活过今天", metric: "suppliesUsed", icon: "用", target: tier => 1 + tier, description: (_tier, target) => `在房车或行动中使用 ${target} 件食物或药品。`, rewards: tier => [{ kind: "supplies", label: tier ? "血浆袋" : "医用缝合包", itemName: tier ? "血浆袋" : "医用缝合包" }] },
+  { category: "房车维护", title: "让引擎继续转", metric: "repairs", icon: "修", target: tier => 1 + tier, description: (_tier, target) => `完成 ${target} 次房车部件修复。`, rewards: tier => [{ kind: "equipment", label: tier ? "警用防弹衣" : "精准步枪", itemName: tier ? "警用防弹衣" : "精准步枪" }] },
+  { category: "敌队压制", title: "清理竞争者", metric: "squads", icon: "战", target: tier => 1 + tier, description: (_tier, target) => `在交火中累计击破 ${target} 支拾荒者小队。`, rewards: tier => [{ kind: "currency", label: `货币 ¥${1400 + tier * 900}`, amount: 1400 + tier * 900 }] },
+  { category: "深区侦察", title: "核心留痕", metric: "coreSearches", icon: "核", target: tier => 2 + tier, description: (_tier, target) => `进入任意地点核心区并完成 ${target} 次搜索。`, rewards: () => [{ kind: "item", label: "搜救仪", itemName: "搜救仪" }] },
+  { category: "装备回收", title: "武装房车", metric: "recoverEquipment", icon: "装", target: tier => 1 + tier, description: (_tier, target) => `成功撤离并带回 ${target} 件装备。`, rewards: tier => [{ kind: "equipment", label: tier ? "军用全盔" : "防暴头盔", itemName: tier ? "军用全盔" : "防暴头盔" }] },
+  { category: "指定提交", title: "无线电指定件", metric: "submitted", icon: "交", target: () => 1, submitItemName: tier => ["通用机械零件", "耐热密封圈组", "精密传动组件"][Math.min(2, tier)], description: (_tier, _target, item) => `从存储柜提交 1 件「${item}」。`, rewards: tier => [{ kind: "coins", label: `矿币 ×${1 + tier}`, amount: 1 + tier }, { kind: "currency", label: `货币 ¥${800 + tier * 600}`, amount: 800 + tier * 600 }] },
+  { category: "人员扩编", title: "最后的空座", metric: "recruits", icon: "人", target: () => 1, description: () => "通过现场信号或搜救系统招募 1 名新成员。", rewards: tier => [{ kind: "item", label: "搜救仪", itemName: "搜救仪" }, { kind: "currency", label: `货币 ¥${1200 + tier * 800}`, amount: 1200 + tier * 800 }] },
+];
+
+const mysteryContracts: ContractDefinition[] = [
+  { id: "signal-cache", category: "神秘信号", title: "把三件东西放在路标下", description: "完成3次物资搜索；频道另一端不在意你找到了什么。", metric: "searched", target: 3, icon: "?", mystery: true, rewards: [{ kind: "currency", label: "货币 ¥3000", amount: 3000 }, { kind: "item", label: "搜救仪", itemName: "搜救仪" }] },
+  { id: "signal-return", category: "神秘信号", title: "证明这条路还能回来", description: "成功撤离1次。无需进入内部或核心区。", metric: "extractions", target: 1, icon: "?", mystery: true, rewards: [{ kind: "equipment", label: "军用突击步枪", itemName: "军用突击步枪" }, { kind: "currency", label: "货币 ¥1800", amount: 1800 }] },
+  { id: "signal-silence", category: "神秘信号", title: "让一个频道安静下来", description: "击破1支敌方小队。对方的身份并不重要。", metric: "squads", target: 1, icon: "?", mystery: true, rewards: [{ kind: "equipment", label: "重型插板甲", itemName: "重型插板甲" }, { kind: "coins", label: "矿币 ×2", amount: 2 }] },
+  { id: "signal-red", category: "神秘信号", title: "带回一件真正稀有的东西", description: "成功带回1件金色或红色品质物资。", metric: "rareRecovered", target: 1, icon: "?", mystery: true, rewards: [{ kind: "currency", label: "货币 ¥4200", amount: 4200 }, { kind: "supplies", label: "再生医疗套装", itemName: "再生医疗套装" }] },
+  { id: "signal-kindness", category: "神秘信号", title: "先照顾好还活着的人", description: "使用1件食物或药品。", metric: "suppliesUsed", target: 1, icon: "?", mystery: true, rewards: [{ kind: "item", label: "耐热密封圈组", itemName: "耐热密封圈组" }, { kind: "item", label: "地下金库钥匙", itemName: "地下金库钥匙" }] },
+];
+
+function campaignContract(index: number): ContractDefinition {
+  const blueprint = contractBlueprints[index % contractBlueprints.length];
+  const tier = Math.floor(index / contractBlueprints.length);
+  const target = blueprint.target(tier);
+  const submitItemName = blueprint.submitItemName?.(tier);
+  return { id: `campaign-${index}`, category: blueprint.category, title: blueprint.title, metric: blueprint.metric, icon: blueprint.icon, target, submitItemName, description: blueprint.description(tier, target, submitItemName), rewards: blueprint.rewards(tier) };
+}
+
+function contractRewardSummary(contract: ContractDefinition) { return contract.rewards.map(reward => reward.label).join(" + "); }
 
 const qualityClass: Record<Quality, string> = { 普通: "q-common", 熟练: "q-skilled", 精英: "q-elite", 名家: "q-master", 传奇: "q-legend" };
 const roleCodes: Record<string, string> = { 指挥官: "CMD", 侦察员: "SCOUT", 突击手: "ATK", 狙击手: "MRK", 医疗员: "MED", 机械师: "ENG", 厨师: "COOK", 军需官: "LOG", 黑市联络员: "LIA", 搜救队长: "SAR" };
@@ -291,11 +347,60 @@ if (peakCombatant) peakCombatant.attack = 150;
 
 const allRelationshipCatalog: Relationship[] = relationshipProfiles.map((profile, index) => ({ ...profile, id: 5000 + index }));
 
+const relationshipArtSlugs: Record<string, string> = {
+  桃夭: "taoyao", 绯夏: "feixia", 蜜糖: "mitang", 露娜: "luna", 夜莺: "yeying",
+  维拉: "vera", 赤练: "chilian", 塞琳: "celine", 伊芙: "eve", 九尾: "jiuwei",
+  莫妮卡: "monica", 黑蔷薇: "blackrose", 魅魔莉莉丝: "lilith", 克利奥帕特拉: "cleopatra", 貂蝉: "diaochan",
+};
+const relationshipArtVersions: Partial<Record<string, string>> = {
+  克利奥帕特拉: "v2",
+  魅魔莉莉丝: "v3",
+  貂蝉: "v3",
+};
+function relationshipArt(person: Relationship, mode: "regular" | "allure") {
+  const slug = relationshipArtSlugs[person.name] ?? `profile-${person.id}`;
+  const version = relationshipArtVersions[person.name] ?? "v1";
+  return `/assets/companions/companion-${slug}-${mode}-${version}.png`;
+}
+
 const miningRates: Record<string, number> = { "CPU·老式双核": .002, "CPU·i5处理器": .008, "CPU·服务器旗舰": .025, "GPU·GTX960": .01, "GPU·RTX4070": .035, "GPU·RTX5090": .065, "GPU·RTX6090": .1, "内存·8GB": .003, "内存·32GB高频": .012, "内存·实验型模块": .03 };
 function miningYield(item: Loot) { return miningRates[item.name] ?? (item.type === "电脑" ? [0, .001, .004, .01, .022, .05, .1][item.grade] : 0); }
 function medicineTreatment(item: Loot) { return item.type === "药品" ? [0, 10, 16, 24, 34, 48, 72][Math.max(1, Math.min(6, item.grade))] : 0; }
 
 function seeded(seed: number) { const value = Math.sin(seed * 999.91) * 43758.5453; return value - Math.floor(value); }
+const repairMaterialTracks: Record<"发动机" | "传动系统" | "密封系统" | "导航系统" | "冷却系统", string[]> = {
+  发动机: ["通用机械零件", "通用机械零件", "精密传动组件", "耐热密封圈组", "精密传动组件", "完整冷却核心", "耐热密封圈组", "精密传动组件", "完整冷却核心", "实验型导航核心"],
+  传动系统: ["通用机械零件", "精密传动组件", "通用机械零件", "精密传动组件", "耐热密封圈组", "精密传动组件", "完整冷却核心", "精密传动组件", "完整冷却核心", "实验型导航核心"],
+  密封系统: ["耐热密封圈组", "通用机械零件", "耐热密封圈组", "精密传动组件", "耐热密封圈组", "完整冷却核心", "精密传动组件", "耐热密封圈组", "完整冷却核心", "实验型导航核心"],
+  导航系统: ["加密数据芯片", "便携辐射计", "加密数据芯片", "精密传动组件", "便携辐射计", "实验型导航核心", "加密数据芯片", "实验型导航核心", "星舰控制终端", "实验型导航核心"],
+  冷却系统: ["净水滤芯", "耐热密封圈组", "净水滤芯", "完整冷却核心", "耐热密封圈组", "完整冷却核心", "精密传动组件", "完整冷却核心", "实验型导航核心", "完整冷却核心"],
+};
+const upgradeMaterialTracks: Record<"床位" | "仓库" | "医疗站" | "工作台" | "侦察台" | "武器站", string[]> = {
+  床位: ["通用机械零件", "耐热密封圈组", "精密传动组件"], 仓库: ["通用机械零件", "精密传动组件", "耐热密封圈组"],
+  医疗站: ["抗生素", "血浆袋", "实验型血清"], 工作台: ["通用机械零件", "精密传动组件", "完整冷却核心"],
+  侦察台: ["便携辐射计", "加密数据芯片", "实验型导航核心"], 武器站: ["步枪弹药箱", "精准步枪", "军用突击步枪"],
+};
+function generateCompanionTradeRequirements(cycle: number): MaterialRequest[] {
+  const allowed = fieldLootTemplates.filter(item => item.grade <= 4 && item.type !== "专属" && item.name !== "绯红邀约终端" && item.name !== "搜救仪");
+  const picked: MaterialRequest[] = [];
+  const count = 3;
+  let remaining = 4 + Math.floor(seeded(cycle * 71 + 19) * 5);
+  for (let index = 0; index < count; index++) {
+    const roll = seeded(cycle * 101 + index * 37);
+    let grade = cycle === 0 ? (index === 1 ? 2 : 1) : roll < .78 ? 1 : roll < .97 ? 2 : roll < .998 ? 3 : 4;
+    if (index === count - 1 && grade >= 3 && remaining > 1) grade = 1;
+    const pool = allowed.filter(item => item.grade === grade);
+    const fallback = allowed.filter(item => item.grade <= 2);
+    const template = (pool.length ? pool : fallback)[Math.floor(seeded(cycle * 149 + index * 61) * (pool.length || fallback.length))];
+    if (!template) continue;
+    const slotsLeft = count - index;
+    const quantity = grade >= 3 ? 1 : index === count - 1 ? remaining : Math.max(1, Math.min(remaining - (slotsLeft - 1), 1 + Math.floor(seeded(cycle * 181 + index * 83) * 3)));
+    remaining -= quantity;
+    picked.push({ name: template.name, quantity, grade: template.grade });
+  }
+  if (remaining > 0 && picked.length) picked[0].quantity += remaining;
+  return picked;
+}
 function relationshipQuality(seed: number): Quality {
   const roll = seeded(seed) * 100;
   return roll < 65 ? "普通" : roll < 89 ? "熟练" : roll < 97 ? "精英" : roll < 99.7 ? "名家" : "传奇";
@@ -424,7 +529,7 @@ function createStarterCrimsonTerminal(): PackedLoot {
 }
 function storeKind(item: Loot): StoreKind { return item.type === "食物" || item.type === "药品" ? "冰箱" : item.type === "装备" || item.type === "弹药" || item.type === "专属" ? "装备柜" : "存储柜"; }
 function hardwareKind(name: string): HardwareKind | null { return name.startsWith("CPU") ? "CPU" : name.startsWith("GPU") ? "GPU" : name.startsWith("内存") ? "内存" : null; }
-function purpose(item: Loot) { if (item.name === "绯红邀约终端") return "成功撤离后启用，永久解锁房车「伴侣」板块"; if (item.type === "食物") return "局内应急 / 房车补充饱食度"; if (item.type === "药品") return "局内救治 / 房车恢复健康"; if (item.type === "装备") return "配置出战装备，为三人行动组提供共享增益"; if (item.type === "专属") return `仅限${item.exclusiveFor}装备 · ${item.bonus}`; if (item.type === "弹药") return "军用贸易物资；战斗不再消耗弹药"; if (item.type === "零件") return "提交房车主线修复"; if (item.type === "奢侈品") return "高价出售换取货币"; if (item.type === "电脑") return "安装至电脑，持续产出矿币"; if (item.type === "钥匙") return "开启核心区密室或特殊撤离"; return "消耗后触发特殊系统"; }
+function purpose(item: Loot) { if (item.name === "绯红邀约终端") return "成功撤离后启用，永久解锁房车「伴侣」板块"; if (item.type === "食物") return "局内应急 / 房车补充饱食度"; if (item.type === "药品") return "局内救治 / 房车恢复健康"; if (item.type === "装备") return "配置出战装备，为三人行动组提供共享增益"; if (item.type === "专属") return `仅限${item.exclusiveFor}装备 · ${item.bonus}`; if (item.type === "弹药") return "军用贸易物资；战斗不再消耗弹药"; if (item.type === "零件") return "用于房车指定修复、建设或交换需求"; if (item.type === "奢侈品") return "高价出售换取货币"; if (item.type === "电脑") return "安装至电脑，持续产出矿币"; if (item.type === "钥匙") return "开启核心区密室或特殊撤离"; return "消耗后触发特殊系统"; }
 function lootStory(item: Loot) {
   if (item.story) return item.story;
   const stories: Record<LootType, string[]> = {
@@ -497,32 +602,52 @@ function PersonDetail({ person, joined, onClose, panel = false, exclusiveEquippe
   return panel ? content : <div className="person-detail-backdrop" onClick={onClose}>{content}</div>;
 }
 
-function RelationshipCard({ person, joined, assigned, onClick }: { person: Relationship; joined: boolean; assigned?: boolean; onClick: () => void }) {
-  return <button className={`relationship-card ${qualityClass[person.quality]} ${joined ? "joined" : ""}`} onClick={onClick}>
-    <i className="relationship-glow" />
-    <header><span>MIDNIGHT PASS · {String(person.id).slice(-3)}</span><em>{person.quality}</em></header>
-    <div className="relationship-portrait"><span>{person.name.slice(0, 1)}</span><i /><b>{person.role === "伴侣" ? "♥" : "✦"}</b></div>
-    <section><small>{person.role} · 兼任{person.subRole} · 成年 {person.age}</small><h3>{person.name}</h3><p>“{person.tagline}”</p></section>
-    <div className="relationship-metrics"><span><small>默契</small><b>{person.bond}</b></span><span><small>魅力</small><b>{person.charm}</b></span><strong>{person.score}</strong></div>
-    <footer><span>{assigned ? "ON BOARD · 已入席" : joined ? "AVAILABLE · 已同行" : "UNMET · 未邂逅"}</span><i /></footer>
-  </button>;
+function RelationshipCard({ person, joined, assigned, onClick }: { person: Relationship; joined: boolean; assigned?: boolean; artMode?: RelationshipArtMode; hoverAllure?: boolean; onToggleArt?: () => void; onClick: () => void }) {
+  return <article className={`relationship-card ${qualityClass[person.quality]} ${joined ? "joined" : "allure-locked"}`}>
+    <button className="relationship-card-main" onClick={onClick} aria-label={`查看${person.name}的完整档案`}>
+      <div className="relationship-card-art" aria-hidden="true">
+        <img className="relationship-art-regular" src={relationshipArt(person, "regular")} alt="" />
+        <img className="relationship-art-allure" src={relationshipArt(person, "allure")} alt="" />
+      </div>
+      <div className="relationship-card-shade" />
+      {!joined && <div className="relationship-allure-lock"><span>获得该人物后解锁暮色形态</span></div>}
+      <header className="relationship-card-top"><span>{person.role}</span><em>{person.quality}</em></header>
+      <section className="relationship-card-copy">
+        <h3>{person.name}</h3>
+        <small>{person.role} / {person.subRole} · 成年 {person.age}</small>
+        <p className="relationship-card-tagline">“{person.tagline}”</p>
+        <footer>{assigned ? "ON BOARD · 已入席" : joined ? "AVAILABLE · 已同行" : "UNMET · 未邂逅"}</footer>
+      </section>
+    </button>
+  </article>;
 }
 
-function RelationshipDetail({ person, joined, assigned, onClose }: { person: Relationship; joined: boolean; assigned: boolean; onClose: () => void }) {
-  return <div className="relationship-detail-backdrop" onClick={onClose}><article className={`relationship-detail ${qualityClass[person.quality]}`} onClick={event => event.stopPropagation()}>
+function RelationshipDetail({ person, joined, assigned, onClose }: { person: Relationship; joined: boolean; assigned: boolean; artMode?: RelationshipArtMode; onToggleArt?: () => void; onClose: () => void }) {
+  return <div className="relationship-detail-backdrop" onClick={onClose}><article className={`relationship-detail relationship-detail-gallery ${qualityClass[person.quality]}`} onClick={event => event.stopPropagation()}>
     <button className="relationship-detail-close" onClick={onClose} aria-label="关闭暮色档案">×</button>
-    <header className="relationship-detail-head"><div><small>PRIVATE RV ACCESS</small><b>暮色同行者私密档案</b></div><span>21+ · CONSENSUAL</span></header>
-    <div className="relationship-clearance"><span>{person.quality}通行证</span><b>{person.role}</b><em>{assigned ? "ON BOARD / 已入席" : joined ? "AVAILABLE / 已同行" : "UNMET / 未邂逅"}</em></div>
-    <div className="relationship-detail-hero"><div className="relationship-photo"><span>{person.name.slice(0, 1)}</span><i /><small>{person.role === "伴侣" ? "HEART" : "HYPE"}</small></div><div><small>REGISTERED ADULT / 成年角色</small><h2>{person.name}</h2><p>{person.age}岁 · 主职{person.role} · 兼任{person.subRole}</p><blockquote>“{person.tagline}”</blockquote></div><strong>{person.score}<small>/100</small></strong></div>
-    <div className="relationship-stat-grid"><div><span>综合能力</span><b>{person.score}</b></div><div><span>魅力评级</span><b>{person.charm}</b></div><div><span>当前默契</span><b>{person.bond}</b></div><div><span>档案品质</span><b>{person.quality}</b></div></div>
-    <section className="relationship-story"><header><span>AFTER HOURS LOG</span><b>邂逅记录</b></header><p>{person.story}</p></section>
-    <div className="relationship-assessment"><div><small>房车增益</small><b>{person.skill}</b></div><div><small>相处提醒</small><b>{person.flaw}</b></div></div>
-    <footer><span>所有关系角色均为成年人</span><i /><b>亲密只是一种末日资源，也需要尊重与选择</b></footer>
+    <section className={`relationship-detail-visual ${joined ? "" : "allure-locked"}`}>
+      <img className="relationship-detail-regular" src={relationshipArt(person, "regular")} alt={`${person.name}常规人物立绘`} />
+      <img className="relationship-detail-allure" src={relationshipArt(person, "allure")} alt={`${person.name}第二形态人物立绘`} />
+      <span>{joined ? "悬停查看第二形态" : "获得该人物后解锁暮色形态"}</span>
+    </section>
+    <section className="relationship-detail-dossier">
+      <header className="relationship-detail-head"><div><small>PRIVATE RV ACCESS</small><b>暮色同行者私密档案</b></div><span>21+ · CONSENSUAL</span></header>
+      <div className="relationship-clearance"><span>{person.quality}通行证</span><b>{person.role}</b><em>{assigned ? "ON BOARD / 已入席" : joined ? "AVAILABLE / 已同行" : "UNMET / 未邂逅"}</em></div>
+      <div className="relationship-detail-identity"><div><small>REGISTERED ADULT / 成年角色</small><h2>{person.name}</h2><p>{person.age}岁 · 主职{person.role} · 兼任{person.subRole}</p></div><strong>{person.score}<small>/100</small></strong></div>
+      <blockquote className="relationship-detail-quote">“{person.tagline}”</blockquote>
+      <div className="relationship-stat-grid"><div><span>综合能力</span><b>{person.score}</b></div><div><span>魅力评级</span><b>{person.charm}</b></div><div><span>当前默契</span><b>{person.bond}</b></div><div><span>档案品质</span><b>{person.quality}</b></div></div>
+      <section className="relationship-story"><header><span>AFTER HOURS LOG</span><b>邂逅记录</b></header><p>{person.story}</p></section>
+      <div className="relationship-assessment"><div><small>房车增益</small><b>{person.skill}</b></div><div><small>相处提醒</small><b>{person.flaw}</b></div></div>
+      <footer className="relationship-detail-footer"><span>所有关系角色均为成年人</span><i /><b>亲密也需要尊重与选择</b></footer>
+    </section>
   </article></div>;
 }
 
-function SurvivorCandidateChoices({ candidates, canRecruit, onRecruit, source }: { candidates: Crew[]; canRecruit: boolean; onRecruit: (person: Crew) => void; source: "现场" | "搜救" }) {
-  return <div className="candidate-choice-grid">{candidates.map(person => <article className={`candidate-choice ${qualityClass[person.quality]}`} key={person.id}><header><span>{source}候选</span><em>{person.quality}</em></header><div className="candidate-choice-avatar">{person.name.slice(0, 1)}</div><strong>{person.score}</strong><h3>{person.name}</h3><p>{person.role} · 兼任{person.subRole}</p><small>战斗 {person.attack} · 防御 {person.defense} · 潜力 {person.potential}</small><button disabled={!canRecruit} onClick={() => onRecruit(person)}>{canRecruit ? "选择此人加入" : "队伍已满"}</button></article>)}</div>;
+function SurvivorCandidateChoices({ candidates, canRecruit, onRecruit, onReplace, source }: { candidates: Crew[]; canRecruit: boolean; onRecruit: (person: Crew) => void; onReplace: (person: Crew) => void; source: "现场" | "搜救" }) {
+  return <div className="candidate-choice-grid">{candidates.map(person => <article className={`candidate-choice ${qualityClass[person.quality]}`} key={person.id}><header><span>{source}候选</span><em>{person.quality}</em></header><div className="candidate-choice-avatar">{person.name.slice(0, 1)}</div><strong>{person.score}</strong><h3>{person.name}</h3><p>{person.role} · 兼任{person.subRole}</p><small>战斗 {person.attack} · 防御 {person.defense} · 潜力 {person.potential}</small><div className="candidate-actions"><button disabled={!canRecruit} onClick={() => onRecruit(person)}>{canRecruit ? "加入空位" : "队伍已满"}</button><button className="replace" onClick={() => onReplace(person)}>替换旧成员</button></div></article>)}</div>;
+}
+function ReplacementModal({ candidate, crew, onReplace, onClose }: { candidate: Crew; crew: Crew[]; onReplace: (person: Crew) => void; onClose: () => void }) {
+  return <div className="replacement-backdrop" onClick={onClose}><section className="replacement-modal" onClick={event => event.stopPropagation()}><button className="replacement-close" onClick={onClose}>×</button><header><small>CREW REPLACEMENT</small><h2>选择要被替换的成员</h2><p>新成员 <b>{candidate.name}</b> 将继承被替换者在房车与行动组中的位置；旧成员的专属道具会退回装备柜。</p></header><div className="replacement-candidate"><span>{candidate.name.slice(0, 1)}</span><div><b>{candidate.name}</b><small>{candidate.quality} · {candidate.role} / {candidate.subRole}</small></div><strong>战 {candidate.attack} · 防 {candidate.defense}</strong></div><div className="replacement-list">{crew.map(person => <button onClick={() => onReplace(person)} key={person.id}><span>{person.name.slice(0, 1)}</span><div><b>{person.name}</b><small>{person.role} · {person.quality}</small></div><em>战 {person.attack} / 防 {person.defense}</em><strong>替换</strong></button>)}</div></section></div>;
 }
 function GridCells({ cols, rows }: { cols: number; rows: number }) { return <>{Array.from({ length: cols * rows }).map((_, index) => <i aria-hidden="true" style={{ gridColumn: index % cols + 1, gridRow: Math.floor(index / cols) + 1 }} key={index} />)}</>; }
 function WarehouseGrid({ items, action }: { items: PackedLoot[]; action: (item: PackedLoot) => void }) { return <div className="stash-grid expanded-grid"><GridCells cols={10} rows={24} />{items.map(item => <button onClick={() => action(item)} className={`packed-object grade-${item.grade} ${item.w * item.h <= 2 ? "compact-object" : ""}`} style={{ gridColumn: `${item.px + 1} / span ${item.w}`, gridRow: `${item.py + 1} / span ${item.h}` }} key={item.id}><span>{gradeNames[item.grade]} · {item.type}</span><b>{item.name}</b><small>{item.w}×{item.h} · ¥{item.value}</small><em>查看详情</em></button>)}</div>; }
@@ -575,6 +700,10 @@ export default function Home() {
   const [kit, setKit] = useState<Kit>({ weapon: "旧式弩", backpack: "帆布背包", armor: "轻便夹克", helmet: "工地头盔", tactical: "简易照明棒" });
   const [ownedEquipment, setOwnedEquipment] = useState(["旧式弩", "帆布背包", "轻便夹克", "工地头盔", "简易照明棒"]);
   const [prepSlot, setPrepSlot] = useState<KitSlot>("weapon");
+  const [loadoutModalOpen, setLoadoutModalOpen] = useState(false);
+  const [crewModalOpen, setCrewModalOpen] = useState(false);
+  const [crewModalSlot, setCrewModalSlot] = useState(0);
+  const [plannedPlaceId, setPlannedPlaceId] = useState(1);
   const [activePlace, setActivePlace] = useState<Place | null>(null);
   const [locationEscapes, setLocationEscapes] = useState<Record<number, number>>({});
   const [raidSeed, setRaidSeed] = useState(() => Math.floor(Math.random() * 1_000_000_000));
@@ -613,7 +742,19 @@ export default function Home() {
   const [draggedRelationship, setDraggedRelationship] = useState<number | null>(null);
   const [companionUnlocked, setCompanionUnlocked] = useState(false);
   const [relationshipContacts, setRelationshipContacts] = useState(0);
+  const [companionTradeRequirements, setCompanionTradeRequirements] = useState<MaterialRequest[]>(() => generateCompanionTradeRequirements(0));
+  const [companionTradeCycle, setCompanionTradeCycle] = useState(0);
+  const [companionTradeNextRefreshDay, setCompanionTradeNextRefreshDay] = useState(3);
+  const [relationshipArtModes, setRelationshipArtModes] = useState<Record<string, RelationshipArtMode>>({});
   const [selectedRelationship, setSelectedRelationship] = useState<Relationship | null>(null);
+  const [replacementCandidate, setReplacementCandidate] = useState<Crew | null>(null);
+  const [replacementSource, setReplacementSource] = useState<ReplacementSource>("recruit");
+  const [endingUnlocked, setEndingUnlocked] = useState(false);
+  const [endingOpen, setEndingOpen] = useState(false);
+  const [endingLegendaryCandidates, setEndingLegendaryCandidates] = useState<Crew[]>([]);
+  const [endingCompanionCandidates, setEndingCompanionCandidates] = useState<Relationship[]>([]);
+  const [endingLegendaryClaimed, setEndingLegendaryClaimed] = useState(false);
+  const [endingCompanionClaimed, setEndingCompanionClaimed] = useState(false);
   const [peopleAtlasTab, setPeopleAtlasTab] = useState<"幸存者档案" | "魅力型角色">("幸存者档案");
   const [warehouseTab, setWarehouseTab] = useState<StoreKind>("装备柜");
   const [selectedStorageItem, setSelectedStorageItem] = useState<PackedLoot | null>(null);
@@ -630,6 +771,10 @@ export default function Home() {
   const [marketOffers, setMarketOffers] = useState<FieldLoot[]>(() => generateMarket(1));
   const [seenItems, setSeenItems] = useState<string[]>([]);
   const [collectedItems, setCollectedItems] = useState<string[]>([]);
+  const [contractMainIndex, setContractMainIndex] = useState(0);
+  const [mysteryContractId, setMysteryContractId] = useState<string | null>(null);
+  const [contractProgress, setContractProgress] = useState(0);
+  const [contractCompletionNote, setContractCompletionNote] = useState("");
   const [atlasFilter, setAtlasFilter] = useState<"全部" | StoreKind>("全部");
   const [saveReady, setSaveReady] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
@@ -672,14 +817,28 @@ export default function Home() {
   const disengageChance = Math.max(30, Math.min(95, Math.round(50 + (allyPower - enemyPower) * .09 + (1 - enemyHpRatio) * 25 - (1 - allyHpRatio) * 14 - zone * 5 + (activeRole("侦察员") ? 14 : 0) + (kit.tactical === "烟雾弹" ? 22 : 0))));
   const injuredCrew = crew.filter(person => person.injury);
   const repairTotal = Object.values(repair).reduce((a, b) => a + b, 0);
-  const repairPercent = Math.min(100, Math.round(repairTotal / 38 * 100));
+  const repairPercent = Math.min(100, Math.round(repairTotal / 50 * 100));
   const miningRate = (Object.values(installed).flat() as PackedLoot[]).reduce((sum, item) => sum + miningYield(item), 0);
   const miningOnline = installed.CPU.length > 0 && installed.GPU.length > 0 && installed.内存.length > 0;
   const hasSearchCaptain = activeRole("搜救队长");
   const hasMarketLiaison = activeRole("黑市联络员");
   const searchDevices = objectStash.filter(item => item.name === "搜救仪").length;
   const crimsonTerminal = objectStash.find(item => item.name === "绯红邀约终端");
+  const plannedPlace = locations.find(place => place.id === plannedPlaceId) ?? locations[0];
+  const actionCrew = expedition.map(id => crew.find(person => person.id === id)).filter(Boolean) as Crew[];
+  const actionCrewReady = actionCrew.length === 3 && actionCrew.every(person => !person.injury);
+  const actionAttack = actionCrew.reduce((sum, person) => sum + person.attack, 0) + selectedGear("weapon").stat * 3;
+  const actionDefense = actionCrew.reduce((sum, person) => sum + person.defense, 0) + (selectedGear("armor").stat + selectedGear("helmet").stat) * 3;
+  const operationRiskLabel = plannedPlace.level >= 8 ? "极高" : plannedPlace.level >= 6 ? "高" : plannedPlace.level >= 4 ? "中等" : "较低";
   const currentStorage = warehouseTab === "装备柜" ? equipmentStash : warehouseTab === "冰箱" ? survivalStash : objectStash;
+  const activeContract = mysteryContracts.find(contract => contract.id === mysteryContractId) ?? campaignContract(contractMainIndex);
+  const contractSubmitItem = activeContract.submitItemName ? [...equipmentStash, ...survivalStash, ...objectStash].find(item => item.name === activeContract.submitItemName) : undefined;
+  const allStoredItems = [...equipmentStash, ...survivalStash, ...objectStash];
+  const storedCount = (name: string) => allStoredItems.filter(item => item.name === name).length;
+  const companionTradeReady = companionTradeRequirements.length > 0 && companionTradeRequirements.every(request => storedCount(request.name) >= request.quantity);
+  const companionTradeRefreshReady = day >= companionTradeNextRefreshDay;
+  const companionTradeRefreshRounds = Math.max(0, companionTradeNextRefreshDay - day);
+  const contractsUntilSignal = 5 - (contractMainIndex % 5);
   const selectedHardwareKind = selectedStorageItem ? hardwareKind(selectedStorageItem.name) : null;
   const selectedHardwareFull = selectedHardwareKind ? installed[selectedHardwareKind].length >= ({ CPU: 2, GPU: 8, 内存: 5 }[selectedHardwareKind]) : false;
   const riskBreakdown = [
@@ -711,7 +870,7 @@ export default function Home() {
       const injuredIds = new Set(restoredCrew.filter(person => person.injury).map(person => person.id));
       setTab(state.tab); setMode(state.mode); setDay(state.day); setCrew(restoredCrew); setSelectedCrew(state.selectedCrew);
       setExpedition(state.expedition.filter(id => !injuredIds.has(id))); setSeatAssignments(state.seatAssignments); setSatiety(state.satiety); setTeamHealth(state.teamHealth);
-      setResources(state.resources); setRepair(state.repair); setUpgrades(state.upgrades); setKit(state.kit); setOwnedEquipment(state.ownedEquipment);
+      setResources(state.resources); setRepair(state.repair); setUpgrades(state.upgrades); setKit(state.kit); setOwnedEquipment(state.ownedEquipment); setPlannedPlaceId(state.plannedPlaceId ?? state.activePlace?.id ?? 1);
       const restoredPlace = state.activePlace ? locations.find(place => place.id === state.activePlace?.id) ?? state.activePlace : null;
       setActivePlace(restoredPlace); setLocationEscapes(state.locationEscapes ?? {}); setRaidSeed(state.raidSeed); setZone(state.zone); setRoomIndex(state.roomIndex ?? 0); setSafeRemaining(state.safeRemaining ?? 0); setOvertime(state.overtime ?? 0); setEscapeProtection(state.escapeProtection ?? 0); setFieldLoot(state.fieldLoot); setRisk(state.risk);
       setLogs(state.logs); setSearchedCount(state.searchedCount); setSearchSeconds(state.searchSeconds); setPackedBag(state.packedBag); setSafeLoot(state.safeLoot);
@@ -720,6 +879,11 @@ export default function Home() {
       setCompanionUnlocked(state.companionUnlocked); setRelationshipContacts(state.relationshipContacts); setExclusiveLoadout(state.exclusiveLoadout);
       setEquipmentStash(state.equipmentStash); setSurvivalStash(state.survivalStash); setObjectStash(restoredObjectStash); setInstalled(state.installed);
       setMiningProgress(state.miningProgress); setCoins(state.coins); setMarketOffers(state.marketOffers); setSeenItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.seenItems, "绯红邀约终端"])) : state.seenItems); setCollectedItems(shouldGrantLegacyStarter ? Array.from(new Set([...state.collectedItems, "绯红邀约终端"])) : state.collectedItems);
+      setContractMainIndex(state.contractMainIndex ?? 0); setMysteryContractId(state.mysteryContractId ?? null); setContractProgress(state.contractProgress ?? 0); setContractCompletionNote(state.contractCompletionNote ?? "");
+      const restoredTradeCycle = state.companionTradeCycle ?? Math.floor((state.day - 1) / 2);
+      setCompanionTradeCycle(restoredTradeCycle); setCompanionTradeRequirements(state.companionTradeRequirements?.length ? state.companionTradeRequirements : generateCompanionTradeRequirements(restoredTradeCycle));
+      setCompanionTradeNextRefreshDay(state.companionTradeNextRefreshDay ?? state.day);
+      setEndingUnlocked(state.endingUnlocked ?? false); setEndingLegendaryCandidates(state.endingLegendaryCandidates ?? []); setEndingCompanionCandidates(state.endingCompanionCandidates ?? []); setEndingLegendaryClaimed(state.endingLegendaryClaimed ?? false); setEndingCompanionClaimed(state.endingCompanionClaimed ?? false);
       setSearchingId(null); setSearchProgress(0); setDraggedLoot(null); setBattle(false); setAmbushWarning(null); setExtracting(0); setSelectedRaidItem(null);
     } catch {
       // 损坏或旧格式的存档不会阻止游戏启动；下一次有效状态变化会覆盖它。
@@ -735,14 +899,75 @@ export default function Home() {
       version: 3,
       savedAt: Date.now(),
       state: {
-        tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment,
+        tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment, plannedPlaceId,
         activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome,
         survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, enemyWave, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts,
         exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems,
+        contractMainIndex, mysteryContractId, contractProgress, contractCompletionNote, companionTradeRequirements, companionTradeCycle, companionTradeNextRefreshDay,
+        endingUnlocked, endingLegendaryCandidates, endingCompanionCandidates, endingLegendaryClaimed, endingCompanionClaimed,
       },
     };
     try { window.localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(save)); } catch { /* 浏览器禁用或空间不足时保持当前内存进度。 */ }
-  }, [saveReady, tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment, activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome, survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, enemyWave, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts, exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems]);
+  }, [saveReady, tab, mode, day, crew, selectedCrew, expedition, seatAssignments, satiety, teamHealth, resources, repair, upgrades, kit, ownedEquipment, plannedPlaceId, activePlace, locationEscapes, raidSeed, zone, roomIndex, safeRemaining, overtime, escapeProtection, fieldLoot, risk, logs, searchedCount, searchSeconds, packedBag, safeLoot, ai, selectedExit, roundOutcome, survivorCandidates, raidParty, enemyParty, enemyLoot, enemyDefeated, enemyWave, battleLogs, relationshipRoster, relationshipCandidate, relationshipAssignments, companionUnlocked, relationshipContacts, exclusiveLoadout, equipmentStash, survivalStash, objectStash, installed, miningProgress, coins, marketOffers, seenItems, collectedItems, contractMainIndex, mysteryContractId, contractProgress, contractCompletionNote, companionTradeRequirements, companionTradeCycle, companionTradeNextRefreshDay, endingUnlocked, endingLegendaryCandidates, endingCompanionCandidates, endingLegendaryClaimed, endingCompanionClaimed]);
+
+  function completeActiveContract() {
+    if (contractProgress < activeContract.target) return;
+    grantContractRewards(activeContract);
+    setContractCompletionNote(`已完成「${activeContract.mystery ? "来自神秘信号的委托" : activeContract.title}」· 获得 ${contractRewardSummary(activeContract)}`);
+    setContractProgress(0);
+    if (activeContract.mystery) {
+      setMysteryContractId(null);
+      return;
+    }
+    const nextMainIndex = contractMainIndex + 1;
+    setContractMainIndex(nextMainIndex);
+    if (nextMainIndex % 5 === 0) {
+      const signalIndex = Math.floor(Math.random() * mysteryContracts.length);
+      setMysteryContractId(mysteryContracts[signalIndex].id);
+    }
+  }
+
+  useEffect(() => {
+    if (!saveReady || repairPercent < 100 || endingUnlocked) return;
+    const ownedCrew = new Set(crew.map(person => person.name));
+    const legendaryPool = allPersonnelCatalog.filter(person => person.quality === "传奇" && !ownedCrew.has(person.name));
+    const legendaryChoices = [...(legendaryPool.length >= 3 ? legendaryPool : allPersonnelCatalog.filter(person => person.quality === "传奇"))]
+      .sort((a, b) => seeded(day * 991 + a.id * 13) - seeded(day * 991 + b.id * 13)).slice(0, 3);
+    const ownedCompanions = new Set(relationshipRoster.map(person => person.name));
+    const companionPool = allRelationshipCatalog.filter(person => !ownedCompanions.has(person.name));
+    const companionChoices = [...(companionPool.length >= 3 ? companionPool : allRelationshipCatalog)]
+      .sort((a, b) => seeded(day * 577 + a.id * 17) - seeded(day * 577 + b.id * 17)).slice(0, 3);
+    setEndingLegendaryCandidates(legendaryChoices); setEndingCompanionCandidates(companionChoices); setEndingUnlocked(true); setEndingOpen(true);
+  }, [saveReady, repairPercent, endingUnlocked, day, crew, relationshipRoster]);
+
+  function createContractRewardItem(name: string, offset: number): PackedLoot | null {
+    const template = [...fieldLootTemplates, ...legendaryRelics].find(item => item.name === name);
+    if (!template) return null;
+    return { ...template, id: Date.now() + offset + Math.floor(Math.random() * 1000), x: 0, y: 0, revealed: true, moved: true, px: 0, py: 0 } as PackedLoot;
+  }
+
+  function grantContractRewards(contract: ContractDefinition) {
+    contract.rewards.forEach((reward, index) => {
+      if (reward.kind === "currency") { setResources(prev => ({ ...prev, 货币: prev.货币 + (reward.amount ?? 0) })); return; }
+      if (reward.kind === "coins") { setCoins(value => value + (reward.amount ?? 0)); return; }
+      if (!reward.itemName) return;
+      const item = createContractRewardItem(reward.itemName, index * 1777);
+      if (!item) return;
+      const kind = storeKind(item);
+      if (kind === "装备柜") {
+        setEquipmentStash(prev => repack([...prev, item]));
+        if (item.type === "装备") setOwnedEquipment(prev => Array.from(new Set([...prev, item.name])));
+      } else if (kind === "冰箱") setSurvivalStash(prev => repack([...prev, item]));
+      else setObjectStash(prev => repack([...prev, item]));
+      setSeenItems(prev => Array.from(new Set([...prev, item.name])));
+      setCollectedItems(prev => Array.from(new Set([...prev, item.name])));
+    });
+  }
+
+  function advanceContract(metric: ContractMetric, amount = 1) {
+    if (activeContract.metric !== metric || amount <= 0) return;
+    setContractProgress(value => Math.min(activeContract.target, value + amount));
+  }
 
   useEffect(() => {
     if (!saveReady || mode !== "explore" || !activePlace) return;
@@ -767,6 +992,7 @@ export default function Home() {
       setFieldLoot(prev => prev.map(entry => entry.id === item.id ? { ...entry, revealed: true } : entry));
       setSearchingId(null); setSearchProgress(100); setSeenItems(prev => Array.from(new Set([...prev, item.name])));
       const nextSearch = searchedCount + 1; setSearchedCount(nextSearch); setSearchSeconds(total => total + duration);
+      advanceContract("searched"); if (zone === 2) advanceContract("coreSearches");
       const nextRisk = Math.min(98, risk + Math.max(2, Math.round(duration * 1.7 + nextSearch * 1.8 + 2 + zone * 3 - (activeRole("侦察员") ? 3 : 0) - exclusiveEffect("risk"))));
       setRisk(nextRisk); setLogs(prev => [`搜索完成：${gradeNames[item.grade]}「${item.name}」；${purpose(item)}。`, ...prev].slice(0, 6));
       const aiSearched = ai.searched + 1;
@@ -852,7 +1078,27 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [battle, raidParty, enemyParty]);
 
-  function startRun() { if (expedition.length === 3 && expedition.every(id => !crew.find(person => person.id === id)?.injury)) setMode("prep"); }
+  function startRun() { setMode("prep"); }
+  function openCrewModal(slot = 0) {
+    setCrewModalSlot(Math.max(0, Math.min(2, slot)));
+    setCrewModalOpen(true);
+  }
+  function assignExpeditionSlot(id: number) {
+    const person = crew.find(member => member.id === id);
+    if (!person || person.injury) return;
+    setExpedition(prev => {
+      const next = [...prev];
+      const existingIndex = next.indexOf(id);
+      if (existingIndex === crewModalSlot) return prev;
+      if (existingIndex >= 0) {
+        const displaced = next[crewModalSlot];
+        next[crewModalSlot] = id;
+        if (displaced !== undefined) next[existingIndex] = displaced;
+      } else if (crewModalSlot < next.length) next[crewModalSlot] = id;
+      else next.push(id);
+      return next.filter((memberId, index, all) => all.indexOf(memberId) === index).slice(0, 3);
+    });
+  }
   function resetLocalGame() {
     if (!resetArmed) { setResetArmed(true); return; }
     window.localStorage.removeItem(LOCAL_SAVE_KEY); window.location.reload();
@@ -898,6 +1144,7 @@ export default function Home() {
   }
 
   function resolveBattleVictory() {
+    advanceContract("squads");
     if (enemyWave === 1 && activePlace) {
       const secondParty = generateEnemyParty(activePlace, day, raidSeed, 2);
       const secondLoot = generateEnemyLoot(activePlace, day, 2);
@@ -956,14 +1203,11 @@ export default function Home() {
 
   function confirmPreparation() {
     if (expedition.length !== 3 || expedition.some(id => crew.find(person => person.id === id)?.injury)) return;
-    setMode("explore"); setRaidSeed(Math.floor(Math.random() * 1_000_000_000)); setActivePlace(null); setZone(0); setRoomIndex(0); setSafeRemaining(0); setOvertime(0); setEscapeProtection(0); setRisk(6); setPackedBag([]); setSafeLoot([]); setFieldLoot([]); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setAmbushWarning(null); setRaidParty(buildRaidParty()); setEnemyParty([]); setEnemyLoot([]); setEnemyDefeated(false); setEnemyWave(1); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
+    const nextSeed = Math.floor(Math.random() * 1_000_000_000);
+    const firstSafe = roomSafeTime(0, plannedPlace);
+    setMode("explore"); setRaidSeed(nextSeed); setActivePlace(plannedPlace); setZone(0); setRoomIndex(0); setSafeRemaining(firstSafe); setOvertime(0); setEscapeProtection(0); setRisk(Math.min(95, 5 + plannedPlace.level * 4)); setPackedBag([]); setSafeLoot([]); setFieldLoot(generateField(plannedPlace.id, day, 0, nextSeed, 0)); setSearchedCount(0); setSearchSeconds(0); setSearchingId(null); setSelectedRaidItem(null); setBattle(false); setAmbushWarning(null); setRaidParty(buildRaidParty()); setEnemyParty(generateEnemyParty(plannedPlace, day, nextSeed, 1)); setEnemyLoot(generateEnemyLoot(plannedPlace, day, 1)); setEnemyDefeated(false); setEnemyWave(1); setBattleLogs([]); setSurvivorCandidates([]); setRoundOutcome([]); setExtracting(0);
     setAi({ zone: 0, searched: 0, value: 0, status: "搜索中", signal: "无线电捕捉到两支队伍交替通联" });
-    setLogs(["装备检查完毕，三人行动组离开房车；其余成员在后方提供职业支援。"]);
-  }
-  function toggleExpedition(id: number) {
-    const person = crew.find(member => member.id === id);
-    if (!person || person.injury) return;
-    setExpedition(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 3 ? [...prev, id] : prev);
+    setLogs([`装备检查完毕，三人行动组抵达${plannedPlace.name}；安全搜索时间 ${firstSafe} 秒。`]);
   }
   function enterPlace(place: Place) { if (place.id > 1 && (locationEscapes[place.id - 1] ?? 0) < 2) return; const firstSafe = roomSafeTime(0, place); setActivePlace(place); setRoomIndex(0); setZone(0); setSafeRemaining(firstSafe); setOvertime(0); setFieldLoot(generateField(place.id, day, 0, raidSeed, 0)); setRaidParty(current => current.length ? current : buildRaidParty()); setEnemyWave(1); setEnemyParty(generateEnemyParty(place, day, raidSeed, 1)); setEnemyLoot(generateEnemyLoot(place, day, 1)); setEnemyDefeated(false); setRisk(Math.min(95, 5 + place.level * 4)); setLogs([`进入${place.name}·${roomNames[0]}。本局存在2支敌队；安全搜索时间 ${firstSafe} 秒，每件物资另有5%伏击概率。`]); }
   function advanceRoom() { if (!activePlace || roomIndex >= roomZones.length - 1 || searchingId !== null || battle || ambushWarning) return; enterRoom(roomIndex + 1); }
@@ -991,7 +1235,7 @@ export default function Home() {
       setTeamHealth(value => Math.min(100, value + 8 + item.grade * 4));
       setRaidParty(prev => { const next = prev.map(unit => ({ ...unit })); const patient = [...next].sort((a, b) => a.hp - b.hp)[0]; if (patient) patient.hp = Math.min(patient.maxHp, patient.hp + 12 + item.grade * 6); return next; });
     }
-    setPackedBag(prev => repack(prev.filter(entry => entry.id !== item.id), bagCols, bagRows));
+    setPackedBag(prev => repack(prev.filter(entry => entry.id !== item.id), bagCols, bagRows)); advanceContract("suppliesUsed");
     setLogs(prev => [`局内使用${item.name}，小队${item.type === "食物" ? "饱食度" : "健康"}得到恢复。`, ...prev]);
   }
 
@@ -1055,14 +1299,22 @@ export default function Home() {
   function settleRun() {
     const returned = [...packedBag, ...safeLoot]; storeReturned(returned); setCollectedItems(prev => Array.from(new Set([...prev, ...returned.map(item => item.name)])));
     const extractionSucceeded = roundOutcome.some(line => line.includes("成功撤离"));
-    if (extractionSucceeded && activePlace) setLocationEscapes(prev => ({ ...prev, [activePlace.id]: (prev[activePlace.id] ?? 0) + 1 }));
+    if (extractionSucceeded && activePlace) {
+      advanceContract("extractions");
+      advanceContract("recoverFood", returned.filter(item => item.type === "食物").length);
+      advanceContract("recoverEquipment", returned.filter(item => item.type === "装备").length);
+      advanceContract("rareRecovered", returned.filter(item => item.grade >= 5).length);
+      const nextClears = (locationEscapes[activePlace.id] ?? 0) + 1;
+      setLocationEscapes(prev => ({ ...prev, [activePlace.id]: nextClears }));
+      if (nextClears >= 2 && activePlace.id < locations.length) setPlannedPlaceId(activePlace.id + 1);
+    }
     const foundGear = returned.filter(item => item.type === "装备").map(item => item.name); setOwnedEquipment(prev => Array.from(new Set([...prev, ...foundGear])));
     const relicRecovery = exclusiveEffect("recovery");
     const companionPower = relationshipQualityPower("伴侣");
     const nextSatiety = Math.max(0, satiety - 10 + (activeRole("厨师") ? 4 : 0) + companionPower + relicRecovery); setSatiety(nextSatiety); setTeamHealth(value => Math.min(100, Math.max(0, value + (activeRole("医疗员") ? 3 : 0) + companionPower * 2 + relicRecovery - (nextSatiety < 25 ? 8 : 0))));
     if (miningOnline) { const total = miningProgress + miningRate; const mined = Math.floor(total); setMiningProgress(total - mined); if (mined) setCoins(value => value + mined); }
     setCrew(prev => prev.map(member => ({ ...member, stamina: Math.min(100, member.stamina + (expedition.includes(member.id) ? 18 : 30)), score: expedition.includes(member.id) && member.score < member.potential ? member.score + 1 : member.score })));
-    const nextDay = day + 1; setDay(nextDay); if (nextDay % 2 === 0) setMarketOffers(generateMarket(nextDay)); if (zone === 2 && searchedCount >= 2) setResources(prev => ({ ...prev, 货币: prev.货币 + 600 }));
+    const nextDay = day + 1; setDay(nextDay); if (nextDay % 2 === 0) setMarketOffers(generateMarket(nextDay));
     setMode("base"); setTab("房车"); setPackedBag([]); setSafeLoot([]);
   }
 
@@ -1075,8 +1327,20 @@ export default function Home() {
     setCrew(remaining); setExpedition(prev => prev.filter(id => id !== person.id)); setSeatAssignments(prev => prev.map(id => id === person.id ? null : id));
     setSelectedCrew(remaining[0]?.id ?? 0); setSelectedAtlasPerson(null);
   }
-  function repairPart(name: keyof typeof repair) { const cost = activeRole("机械师") ? 3 : 4; const caps = { 发动机: 10, 传动系统: 8, 密封系统: 6, 导航系统: 7, 冷却系统: 7 }; if (resources.零件 < cost || repair[name] >= caps[name]) return; setResources(prev => ({ ...prev, 零件: prev.零件 - cost })); setRepair(prev => ({ ...prev, [name]: prev[name] + 1 })); }
-  function upgradeRv(name: keyof typeof upgrades) { const cost = 6 + upgrades[name] * 4; if (resources.零件 < cost || upgrades[name] >= 3) return; setResources(prev => ({ ...prev, 零件: prev.零件 - cost })); setUpgrades(prev => ({ ...prev, [name]: prev[name] + 1 })); }
+  function repairPart(name: keyof typeof repair) {
+    if (repair[name] >= 10) return;
+    const required = repairMaterialTracks[name][repair[name]];
+    const item = [...equipmentStash, ...survivalStash, ...objectStash].find(entry => entry.name === required);
+    if (!item) return;
+    removeStoredItem(item); setRepair(prev => ({ ...prev, [name]: prev[name] + 1 })); advanceContract("repairs");
+  }
+  function upgradeRv(name: keyof typeof upgrades) {
+    if (upgrades[name] >= 3) return;
+    const required = upgradeMaterialTracks[name][upgrades[name]];
+    const item = [...equipmentStash, ...survivalStash, ...objectStash].find(entry => entry.name === required);
+    if (!item) return;
+    removeStoredItem(item); setUpgrades(prev => ({ ...prev, [name]: prev[name] + 1 }));
+  }
 
   function removeStoredItem(item: PackedLoot) {
     const kind = storeKind(item);
@@ -1089,7 +1353,14 @@ export default function Home() {
     if (item.type === "食物") setSatiety(value => Math.min(100, value + 8 + item.grade * 4));
     else if (item.type === "药品") setTeamHealth(value => Math.min(100, value + 10 + item.grade * 5));
     else return;
-    removeStoredItem(item); setSelectedStorageItem(null);
+    removeStoredItem(item); setSelectedStorageItem(null); advanceContract("suppliesUsed");
+  }
+
+  function submitActiveContractItem() {
+    if (activeContract.metric !== "submitted" || !contractSubmitItem) return;
+    removeStoredItem(contractSubmitItem);
+    setSelectedStorageItem(null);
+    setContractProgress(activeContract.target);
   }
 
   function treatCrewInjury(item: PackedLoot, crewId: number) {
@@ -1103,13 +1374,15 @@ export default function Home() {
         : { ...person, health: "受伤", injury: { ...person.injury, treatment } };
     }));
     setTeamHealth(value => Math.min(100, value + Math.max(3, Math.round(amount / 4))));
-    removeStoredItem(item); setSelectedStorageItem(null);
+    removeStoredItem(item); setSelectedStorageItem(null); advanceContract("suppliesUsed");
   }
 
-  function submitStoredPart(item: PackedLoot) {
-    if (item.type !== "零件") return;
-    setResources(prev => ({ ...prev, 零件: prev.零件 + item.grade * 2 + (activeRole("机械师") ? 2 : 0) }));
-    removeStoredItem(item); setSelectedStorageItem(null);
+  function consumeMaterialRequests(requests: MaterialRequest[]) {
+    const consumedIds = new Set<number>();
+    requests.forEach(request => allStoredItems.filter(item => item.name === request.name).slice(0, request.quantity).forEach(item => consumedIds.add(item.id)));
+    setEquipmentStash(prev => repack(prev.filter(item => !consumedIds.has(item.id))));
+    setSurvivalStash(prev => repack(prev.filter(item => !consumedIds.has(item.id))));
+    setObjectStash(prev => repack(prev.filter(item => !consumedIds.has(item.id))));
   }
 
   function sellStoredItem(item: PackedLoot) {
@@ -1149,12 +1422,33 @@ export default function Home() {
     setMarketOffers(prev => prev.filter(entry => entry.id !== item.id)); setCollectedItems(prev => Array.from(new Set([...prev, item.name])));
   }
 
-  function scanSurvivor() {
-    if (!hasSearchCaptain || searchDevices === 0 || survivorCandidates.length > 0) return;
-    const device = objectStash.find(item => item.name === "搜救仪")!; setObjectStash(prev => repack(prev.filter(item => item.id !== device.id)));
+  function scanSurvivor(method: "device" | "cash") {
+    if (!hasSearchCaptain || survivorCandidates.length > 0) return;
+    if (method === "device") {
+      if (searchDevices === 0) return;
+      const device = objectStash.find(item => item.name === "搜救仪")!;
+      setObjectStash(prev => repack(prev.filter(item => item.id !== device.id)));
+    } else {
+      if (resources.货币 < CASH_RESCUE_PRICE) return;
+      setResources(prev => ({ ...prev, 货币: prev.货币 - CASH_RESCUE_PRICE }));
+    }
     setSurvivorCandidates(generateSurvivorCandidates(crew.map(person => person.name)));
   }
-  function recruitCandidate(candidate: Crew) { if (crew.length >= 10 || !survivorCandidates.some(person => person.id === candidate.id)) return; setCrew(prev => [...prev, candidate]); setSeatAssignments(prev => { const next = [...prev]; const exact = next.findIndex((id, index) => id === null && rvStations[index].role === candidate.role); const empty = exact >= 0 ? exact : next.findIndex(id => id === null); if (empty >= 0) next[empty] = candidate.id; return next; }); setSurvivorCandidates([]); }
+  function recruitCandidate(candidate: Crew) { if (crew.length >= 10 || !survivorCandidates.some(person => person.id === candidate.id)) return; setCrew(prev => [...prev, candidate]); setSeatAssignments(prev => { const next = [...prev]; const exact = next.findIndex((id, index) => id === null && rvStations[index].role === candidate.role); const empty = exact >= 0 ? exact : next.findIndex(id => id === null); if (empty >= 0) next[empty] = candidate.id; return next; }); setSurvivorCandidates([]); advanceContract("recruits"); }
+  function openReplacement(candidate: Crew, source: ReplacementSource = "recruit") { setReplacementCandidate(candidate); setReplacementSource(source); }
+  function replaceCrewWithCandidate(replaced: Crew) {
+    if (!replacementCandidate) return;
+    const joining = replacementCandidate;
+    const relic = exclusiveLoadout[replaced.id];
+    if (relic) { setEquipmentStash(prev => repack([...prev, relic])); setExclusiveLoadout(prev => { const next = { ...prev }; delete next[replaced.id]; return next; }); }
+    setCrew(prev => prev.map(person => person.id === replaced.id ? joining : person));
+    setExpedition(prev => prev.map(id => id === replaced.id ? joining.id : id));
+    setSeatAssignments(prev => prev.map(id => id === replaced.id ? joining.id : id));
+    setSelectedCrew(joining.id);
+    if (replacementSource === "recruit") { setSurvivorCandidates([]); advanceContract("recruits"); }
+    else setEndingLegendaryClaimed(true);
+    setReplacementCandidate(null);
+  }
 
   function unlockCompanionSystem() {
     if (!crimsonTerminal || companionUnlocked) return;
@@ -1162,12 +1456,23 @@ export default function Home() {
     setCompanionUnlocked(true); setSelectedStorageItem(null); setTab("伴侣");
   }
 
-  function contactRelationship() {
-    const price = RELATIONSHIP_CONTACT_PRICE;
-    if (!companionUnlocked || relationshipCandidate || resources.货币 < price) return;
+  function submitCompanionTrade() {
+    if (!companionUnlocked || relationshipCandidate || !companionTradeReady) return;
     const picked = pickRelationship(day * 977 + relationshipContacts * 193 + relationshipRoster.length * 71, relationshipRoster.map(person => person.name));
     if (!picked) return;
-    setResources(prev => ({ ...prev, 货币: prev.货币 - price })); setRelationshipContacts(value => value + 1); setRelationshipCandidate(picked);
+    consumeMaterialRequests(companionTradeRequirements); setRelationshipContacts(value => value + 1); setRelationshipCandidate(picked);
+  }
+
+  function refreshCompanionTrade() {
+    if (!companionUnlocked || relationshipCandidate || !companionTradeRefreshReady) return;
+    const nextCycle = companionTradeCycle + 1;
+    setCompanionTradeCycle(nextCycle);
+    setCompanionTradeRequirements(generateCompanionTradeRequirements(nextCycle));
+    setCompanionTradeNextRefreshDay(day + 2);
+  }
+
+  function toggleRelationshipArt(person: Relationship) {
+    setRelationshipArtModes(previous => ({ ...previous, [person.name]: previous[person.name] === "allure" ? "regular" : "allure" }));
   }
 
   function recruitRelationshipCandidate() {
@@ -1178,27 +1483,55 @@ export default function Home() {
     setRelationshipCandidate(null);
   }
 
+  function chooseEndingLegendary(candidate: Crew) {
+    if (endingLegendaryClaimed) return;
+    const joining = { ...candidate, id: Date.now() + Math.floor(Math.random() * 100000), stamina: 100, health: "健康", injury: undefined };
+    if (crew.length >= 10) { openReplacement(joining, "ending"); return; }
+    setCrew(prev => [...prev, joining]); setSeatAssignments(prev => { const next = [...prev]; const exact = next.findIndex((id, index) => id === null && rvStations[index].role === joining.role); const empty = exact >= 0 ? exact : next.findIndex(id => id === null); if (empty >= 0) next[empty] = joining.id; return next; }); setEndingLegendaryClaimed(true);
+  }
+  function chooseEndingCompanion(candidate: Relationship) {
+    if (endingCompanionClaimed) return;
+    const joining = { ...candidate, id: Date.now() + 300000 + Math.floor(Math.random() * 100000) };
+    setRelationshipRoster(prev => prev.some(person => person.name === joining.name) ? prev : [...prev, joining]); setEndingCompanionClaimed(true);
+  }
+
   function moveRelationshipToSeat(id: number, target: number) {
     if (!companionUnlocked) return;
     setRelationshipAssignments(prev => { const next = [...prev]; const source = next.findIndex(personId => personId === id); if (source === target) return prev; const occupant = next[target]; next[target] = id; if (source >= 0) next[source] = occupant; return next; });
     setDraggedRelationship(null);
   }
 
-  if (mode === "prep") return <main className="game-shell prep-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">//</span><div><b>行动配置</b><small>人员与装备只从现有库存中选择</small></div></div><button className="ghost" onClick={() => setMode("base")}>返回房车</button></header>
-    <section className="prep-layout"><div className="prep-main"><div className="prep-heading"><div><small>STEP 01 · TEAM</small><h1>选择三人行动组</h1><p>只有三人进入现场；带有伤病标记的人物必须完成治疗后才能再次出战。</p></div><strong>{expedition.length}<i>/3</i></strong></div>
-      <div className="prep-crew-grid">{crew.map(person => <CrewCard key={person.id} person={person} selected={expedition.includes(person.id)} onClick={() => toggleExpedition(person.id)} />)}</div>
-      <div className="kit-config"><div className="prep-heading"><div><small>STEP 02 · LOADOUT</small><h2>使用已有装备</h2><p>初期没有高级装备；搜刮并成功撤离后才会进入可选列表。</p></div></div>
-        <div className="kit-tabs">{(Object.keys(kitLabels) as KitSlot[]).map(slot => <button onClick={() => setPrepSlot(slot)} className={prepSlot === slot ? "active" : ""} key={slot}><span>{kitLabels[slot]}</span><b>{kit[slot]}</b></button>)}</div>
-        <div className="gear-options">{availableGearOptions(prepSlot).map(option => <button onClick={() => setKit(prev => ({ ...prev, [prepSlot]: option.name }))} className={`${kit[prepSlot] === option.name ? "selected" : ""} item-grade-${option.grade}`} key={option.name}><span>{gradeNames[option.grade]}</span><b>{option.name}</b><small>{option.note}</small><em>{kit[prepSlot] === option.name ? "已装备" : "选择"}</em></button>)}</div>
-      </div></div>
-      <aside className="mission-summary"><small>ACTION READINESS</small><h2>行动准备度 {preparationScore}</h2><div className="prep-readiness"><span>{preparationTier === 2 ? "强力配置" : preparationTier === 1 ? "良好配置" : "普通配置"}</span><b>外围 {roomSafeTime(0)}秒 · 内部 {roomSafeTime(1)}秒 · 核心 {roomSafeTime(2)}秒</b><p>武器、护甲和头盔的数值会同时加成三名行动队员。</p></div>{injuredCrew.length > 0 && <div className="prep-injury-notice"><span>{injuredCrew.length}名伤员</span><b>无法出战</b><p>前往仓库 → 冰箱，使用药品推进个人治疗进度。</p></div>}<small>GLOBAL SUPPORT</small><h2>全员职业支援</h2><div className="support-list">{rvStations.map(station => <div className={activeRole(station.role) ? "on" : ""} key={station.role}><span>{activeRole(station.role) ? "已生效" : "空缺"}</span><b>{station.role}</b><small>{station.skill}</small></div>)}{relationshipStations.map(station => <div className={activeRelationshipRole(station.role) ? "on relationship-support" : "relationship-support"} key={station.role}><span>{activeRelationshipRole(station.role) ? "暮色支援" : "未入席"}</span><b>{station.role}</b><small>{station.skill}</small></div>)}</div><button className="primary prep-go" disabled={expedition.length !== 3 || expedition.some(id => crew.find(person => person.id === id)?.injury)} onClick={confirmPreparation}>进入战局 <i>→</i></button></aside>
-    </section>
-  </main>;
+  if (mode === "prep") {
+    const plannedUnlocked = plannedPlace.id === 1 || (locationEscapes[plannedPlace.id - 1] ?? 0) >= 2;
+    return <main className="game-shell prep-shell map-prep-shell">
+      <header className="topbar map-prep-topbar"><div className="brand"><span className="brand-mark">//</span><div><b>行动规划</b><small>选择目的地 · 确认情报 · 点火出发</small></div></div><div className="map-prep-status"><span>行动组 <b>{actionCrew.length}/3</b></span><span>战斗力 <b>{actionAttack}</b></span><span>防御 <b>{actionDefense}</b></span></div><button className="ghost" onClick={() => setMode("base")}>返回房车</button></header>
+      <section className="mission-map-layout">
+        <article className="mission-map-panel">
+          <header><div><small>QUARANTINE REGION · 12 OPERATIONS</small><h1>选择行动地点</h1><p>地图由外围向封锁线深处推进；前一地点成功撤离2次后，才能解锁下一处。</p></div><div><span>已解锁</span><b>{locations.filter(place => place.id === 1 || (locationEscapes[place.id - 1] ?? 0) >= 2).length}<i>/12</i></b></div></header>
+          <div className="mission-region-map" role="img" aria-label="感染区十二地点俯视行动地图">
+            <div className="mission-route-glow" />
+            <div className="mission-location-safe-zone">
+              {locations.map((place, index) => { const unlocked = place.id === 1 || (locationEscapes[place.id - 1] ?? 0) >= 2; const selectedPlace = plannedPlaceId === place.id; const clears = locationEscapes[place.id] ?? 0; const position = mapMarkerPositions[index]; return <button aria-label={`${place.name}，${place.risk}危险，${unlocked ? "已解锁" : "未解锁"}`} className={`map-location-node ${place.accent} ${selectedPlace ? "selected" : ""} ${unlocked ? "unlocked" : "locked"}`} style={{ left: `${position.left}%`, top: `${position.top}%` }} onClick={() => setPlannedPlaceId(place.id)} key={place.id}><span>{String(place.id).padStart(2, "0")}</span><div><b>{place.name}</b><small>{place.risk}危险 · {unlocked ? `已解锁 ${clears}/2` : "未解锁"}</small></div><em>{unlocked ? selectedPlace ? "●" : "○" : "×"}</em></button>; })}
+            </div>
+            <div className="mission-map-legend"><span><i className="available" />已解锁</span><span><i className="selected" />当前选择</span><span><i className="locked" />封锁中</span></div>
+          </div>
+        </article>
+        <aside className={`mission-detail-card ${plannedPlace.accent} ${plannedUnlocked ? "" : "locked"}`}>
+          <header><div><small>OPERATION {String(plannedPlace.id).padStart(2, "0")} · LOCATION DOSSIER</small><span className={`risk-${plannedPlace.accent}`}>{plannedPlace.risk}危险</span></div><h2>{plannedPlace.name}</h2><p>{plannedPlace.hint}</p></header>
+          <div className="mission-detail-visual"><span>{String(plannedPlace.id).padStart(2, "0")}</span><div><small>{plannedUnlocked ? "ACCESS GRANTED" : "ACCESS LOCKED"}</small><b>{plannedUnlocked ? "路线已开放" : `需先完成 ${locations[plannedPlace.id - 2]?.name ?? "前置区域"}`}</b></div></div>
+          <section className="mission-detail-stats"><div><span>推荐战斗力</span><b>{50 + plannedPlace.level * 15}</b></div><div><span>敌方队伍</span><b>2 支</b></div><div><span>初始遇敌率</span><b className="danger">20%</b></div><div><span>撤离记录</span><b>{locationEscapes[plannedPlace.id] ?? 0}/2</b></div></section>
+          <section className="mission-time-profile"><header><span>安全搜索窗口</span><b>{preparationTier === 2 ? "强力配置" : preparationTier === 1 ? "良好配置" : "普通配置"}</b></header><div><span>外围 <b>{roomSafeTime(0, plannedPlace)}秒</b></span><span>内部 <b>{roomSafeTime(1, plannedPlace)}秒</b></span><span>核心 <b>{roomSafeTime(2, plannedPlace)}秒</b></span></div></section>
+          <section className="mission-readonly-loadout"><header><span>当前出发配置</span><b>{actionCrewReady ? "行动组就绪" : "需要返回房车调整"}</b></header><div className="mission-crew-strip">{actionCrew.map(person => <span key={person.id}><i>{person.name.slice(0, 1)}</i><b>{person.name}</b><small>{person.role}</small></span>)}</div><p>{kit.weapon} · {kit.armor} · {kit.helmet} · {kit.backpack} · {kit.tactical}</p></section>
+          {!plannedUnlocked && <div className="mission-lock-requirement"><span>解锁条件</span><b>在「{locations[plannedPlace.id - 2]?.name ?? "前置区域"}」成功撤离2次</b><small>当前进度 {(locationEscapes[plannedPlace.id - 1] ?? 0)}/2</small></div>}
+          <button className="mission-depart-button" disabled={!plannedUnlocked || !actionCrewReady} onClick={confirmPreparation}><span>{!plannedUnlocked ? "地点尚未解锁" : !actionCrewReady ? "行动组尚未就绪" : "确认路线并点火出发"}</span><b>{plannedPlace.name} →</b></button>
+        </aside>
+      </section>
+    </main>;
+  }
 
   if (mode === "explore") return <main className="game-shell explore-shell grid-loot-shell">
     <header className="topbar explore-top"><div className="brand"><span className="brand-mark">//</span><div><b>现场搜刮</b><small>{activePlace?.name ?? "选择地点"} · 第 {day} 日</small></div></div>{activePlace && <div className="room-progress">{roomNames.map((name, index) => <span className={index < roomIndex ? "done" : index === roomIndex ? "active" : ""} key={name}><i>{index + 1}</i><b>{index === roomIndex ? name : zoneNames[roomZones[index]]}</b></span>)}</div>}<div className={`raid-clock ${overtime > 0 ? "exposed" : ""} ${enemyDefeated ? "cleared" : ""}`}>{!activePlace ? <><span>行动准备度</span><strong>{preparationScore}</strong><small>{preparationTier === 2 ? "强力" : preparationTier === 1 ? "良好" : "普通"}</small></> : enemyDefeated ? <><span>区域已经清场</span><strong>SAFE</strong><small>不会再出现其他搜索者</small></> : safeRemaining > 0 ? <><span>安全搜索时间</span><strong>00:{String(safeRemaining).padStart(2, "0")}</strong><small>{preparationTier === 2 ? "强力配置" : preparationTier === 1 ? "良好配置" : "普通配置"} · 准备度 {preparationScore}</small></> : <><span>已暴露 {overtime}秒</span><strong>{encounterChance}%</strong><small>遇敌率 · {3 - overtime % 3}秒后检定</small></>}</div></header>
-    {!activePlace ? <section className="location-select"><div className="section-title"><small>CHOOSE A RAID · 10 STAGES</small><h1>十个地点，逐段突破感染区</h1><p>默认只开放第一个地点；在一个地点成功撤离2次，才会解锁下一区域。越深处高品质物资和高阶敌人越常见。</p></div><div className="location-grid">{locations.map((place, i) => { const previousEscapes = place.id === 1 ? 2 : locationEscapes[place.id - 1] ?? 0; const unlocked = place.id === 1 || previousEscapes >= 2; const clears = locationEscapes[place.id] ?? 0; return <button disabled={!unlocked} className={`location-card ${place.accent} ${unlocked ? "" : "locked"}`} onClick={() => enterPlace(place)} key={place.id}><span>{String(i + 1).padStart(2, "0")}</span><em>{place.risk}风险</em><h3>{place.name}</h3><p>{place.hint}</p><div className="location-clearance"><i style={{ width: `${Math.min(100, clears * 50)}%` }} /><small>{unlocked ? `本区成功撤离 ${clears}/2` : `上一区域 ${previousEscapes}/2`}</small></div><b>{unlocked ? "进入第一个房间 →" : "LOCKED · 完成上一区域"}</b></button>; })}</div></section> :
+    {!activePlace ? <section className="location-select"><div className="section-title"><small>CHOOSE A RAID · 12 STAGES</small><h1>十二个地点，逐段突破感染区</h1><p>默认只开放第一个地点；在一个地点成功撤离2次，才会解锁下一区域。越深处高品质物资和高阶敌人越常见。</p></div><div className="location-grid">{locations.map((place, i) => { const previousEscapes = place.id === 1 ? 2 : locationEscapes[place.id - 1] ?? 0; const unlocked = place.id === 1 || previousEscapes >= 2; const clears = locationEscapes[place.id] ?? 0; return <button disabled={!unlocked} className={`location-card ${place.accent} ${unlocked ? "" : "locked"}`} onClick={() => enterPlace(place)} key={place.id}><span>{String(i + 1).padStart(2, "0")}</span><em>{place.risk}风险</em><h3>{place.name}</h3><p>{place.hint}</p><div className="location-clearance"><i style={{ width: `${Math.min(100, clears * 50)}%` }} /><small>{unlocked ? `本区成功撤离 ${clears}/2` : `上一区域 ${previousEscapes}/2`}</small></div><b>{unlocked ? "进入第一个房间 →" : "LOCKED · 完成上一区域"}</b></button>; })}</div></section> :
       <section className="tarkov-layout">
         <aside className="raid-sidebar"><small>RIVAL SQUADS · 2 TEAMS</small><div className={`ai-card ${ai.status === "搜索中" ? "active" : ""}`}><div><b>双队拾荒者编队</b><span>{enemyDefeated ? "全部清除" : `第${enemyWave}/2队 · ${ai.status}`}</span></div><strong>{roomNames[roomIndex]}</strong><p>{activeRole("狙击手") || kit.tactical === "战术无人机" ? `已击破${enemySquadsDefeated}/2队 · 当前${enemyParty.filter(unit => unit.hp > 0).length}人可战 · 战利品估值¥${enemyLoot.reduce((sum, item) => sum + item.value, 0)}` : ai.signal}</p><i><em style={{ width: `${enemyDefeated ? 100 : enemySquadsDefeated * 50 + Math.min(50, (3 - enemyParty.filter(unit => unit.hp > 0).length) / 3 * 50)}%` }} /></i></div>
           <div className="live-odds"><small>本房间遭遇规则</small><div><span>安全时间</span><b>{roomSafeTime(zone)}秒</b></div><div><span>搜索伏击</span><b className="amber">5%/件</b></div><div><span>超时基础遇敌</span><b>20%</b></div><div><span>概率增长</span><b className="amber">+1%/秒</b></div><div><span>敌队进度</span><b>{enemyDefeated ? "2/2 已清场" : `${enemySquadsDefeated}/2击破 · 当前${enemyParty.filter(unit => unit.hp > 0).length}/3人`}</b></div></div>
@@ -1224,39 +1557,64 @@ export default function Home() {
   if (mode === "result") {
     const returned = [...packedBag, ...safeLoot];
     const extractionSucceeded = roundOutcome.some(line => line.includes("成功撤离"));
-    return <main className="result-shell"><section className="result-card"><small>RAID REPORT</small><h1>{returned.length ? "这次冒险带回了能改变房车的东西" : extractionSucceeded ? "行动组成功撤离，但没有带回物资" : "撤离失败，至少人还在"}</h1><p>搜索 {searchedCount} 件物品，深入至{zoneNames[zone]}，停留 {Math.round(searchSeconds)} 秒，AI队伍状态：{ai.status}。</p><div className="outcome-list">{roundOutcome.map((line, i) => <div key={i}><span>{i ? "过程" : "结果"}</span><b>{line}</b></div>)}</div><div className="result-loot">{returned.map(item => <div key={item.id} className={`grade-${item.grade}`}><span>{safeLoot.some(entry => entry.id === item.id) ? "保险箱" : "背包"} · {gradeNames[item.grade]}</span><b>{item.name}</b><small>{purpose(item)}</small></div>)}</div>{survivorCandidates.length > 0 && <section className="result-candidates"><header><div><small>SURVIVOR SIGNALS</small><h2>发现 {survivorCandidates.length} 名幸存者</h2></div><span>只能选择其中一人加入</span></header><SurvivorCandidateChoices candidates={survivorCandidates} canRecruit={crew.length < 10} onRecruit={recruitCandidate} source="现场" /></section>}{relationshipCandidate && <div className="recruit-box midnight-recruit"><div className="recruit-avatar">{relationshipCandidate.name.slice(0, 1)}</div><div><small>极罕见 · 私人频道邂逅</small><h3>{relationshipCandidate.name}</h3><p>{relationshipCandidate.quality}{relationshipCandidate.role} · “{relationshipCandidate.tagline}”</p></div><button onClick={recruitRelationshipCandidate}>留下同行邀请</button></div>}<button className="primary settle" onClick={settleRun}>分类收进房车仓库 <i>→</i></button></section></main>;
+    return <main className="result-shell"><section className="result-card"><small>RAID REPORT</small><h1>{returned.length ? "这次冒险带回了能改变房车的东西" : extractionSucceeded ? "行动组成功撤离，但没有带回物资" : "撤离失败，至少人还在"}</h1><p>搜索 {searchedCount} 件物品，深入至{zoneNames[zone]}，停留 {Math.round(searchSeconds)} 秒，AI队伍状态：{ai.status}。</p><div className="outcome-list">{roundOutcome.map((line, i) => <div key={i}><span>{i ? "过程" : "结果"}</span><b>{line}</b></div>)}</div><div className="result-loot">{returned.map(item => <div key={item.id} className={`grade-${item.grade}`}><span>{safeLoot.some(entry => entry.id === item.id) ? "保险箱" : "背包"} · {gradeNames[item.grade]}</span><b>{item.name}</b><small>{purpose(item)}</small></div>)}</div>{survivorCandidates.length > 0 && <section className="result-candidates"><header><div><small>SURVIVOR SIGNALS</small><h2>发现 {survivorCandidates.length} 名幸存者</h2></div><span>只能选择其中一人加入或替换旧成员</span></header><SurvivorCandidateChoices candidates={survivorCandidates} canRecruit={crew.length < 10} onRecruit={recruitCandidate} onReplace={person => openReplacement(person, "recruit")} source="现场" /></section>}{relationshipCandidate && <div className="recruit-box midnight-recruit"><div className="recruit-avatar">{relationshipCandidate.name.slice(0, 1)}</div><div><small>极罕见 · 私人频道邂逅</small><h3>{relationshipCandidate.name}</h3><p>{relationshipCandidate.quality}{relationshipCandidate.role} · “{relationshipCandidate.tagline}”</p></div><button onClick={recruitRelationshipCandidate}>留下同行邀请</button></div>}<button className="primary settle" onClick={settleRun}>分类收进房车仓库 <i>→</i></button></section>{replacementCandidate && <ReplacementModal candidate={replacementCandidate} crew={crew} onReplace={replaceCrewWithCandidate} onClose={() => setReplacementCandidate(null)} />}</main>;
   }
 
   const tabs: Tab[] = ["房车", "队伍", "仓库", "电脑", "黑市", "招聘", "伴侣", "物资图鉴", "人员图鉴"];
   return <main className="game-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">//</span><div><b>最后十席</b><small>感染区撤离 · 第 {day} 日</small></div></div><nav>{tabs.map(item => <button className={tab === item ? "active" : ""} onClick={() => setTab(item)} key={item}>{item}</button>)}</nav><div className="resources"><span>零件 <b>{resources.零件}</b></span><span>货币 <b>¥{resources.货币}</b></span><span>矿币 <b>{coins}</b></span></div></header>
-    <section className="survival-strip"><div><span>全队饱食度</span><i><em style={{ width: `${satiety}%` }} /></i><b>{satiety}</b></div><div><span>全队健康</span><i><em style={{ width: `${teamHealth}%` }} /></i><b>{teamHealth}</b></div><p>生存值由10人共享 · 厨师与医疗员在战局外持续生效</p></section>
+    <header className="topbar base-topbar"><div className="brand"><span className="brand-mark">//</span><div><b>最后十席</b><small>感染区撤离 · 第 {day} 日</small></div></div><nav>{tabs.map(item => <button className={tab === item ? "active" : ""} onClick={() => setTab(item)} key={item}>{item}</button>)}</nav><div className="topbar-survival"><div title="全队饱食度"><span>饱食</span><i><em style={{ width: `${satiety}%` }} /></i><b>{satiety}</b></div><div title="全队健康"><span>健康</span><i><em style={{ width: `${teamHealth}%` }} /></i><b>{teamHealth}</b></div></div><div className="resources"><span>货币 <b>¥{resources.货币}</b></span><span>矿币 <b>{coins}</b></span></div></header>
 
-    {tab === "房车" && <><section className="hero-panel"><div className="hero-scene" role="img" aria-label="两名男性与一名女性幸存者在末日城市中并肩战斗" /><div className="route-kicker">ROUTE {String(day).padStart(2, "0")} · 距离封锁线 {Math.max(120, 780 - day * 24)} KM</div><h1>每一次深入，<br />都在赌下一次还能回来。</h1><p>房车关键部件仍然受损。选择三人进入地点，依靠全体成员的职业支援，在AI队伍撤离前带回真正有用途的物资。</p><div className="route-line"><span className="done" /><span className="current" /><span /><span /><span /></div><div className="hero-actions"><button className="primary" onClick={startRun}>配置下一次行动 <i>→</i></button><button className={resetArmed ? "reset-save armed" : "reset-save"} onClick={resetLocalGame}>{resetArmed ? "再次点击，确认清除存档" : "重新开始"}</button></div></section>
-      <section className="dashboard-grid"><article className="panel crew-panel"><div className="panel-heading"><div><small>DAILY CONTRACT</small><h2>今日委托 · 深处传来的信号</h2></div><span className="selection-count">轻量目标</span></div><p className="commission-copy">深入任意地点核心并搜索至少2件物品。完成奖励 ¥600；不要求击败AI队伍。</p><div className="crew-row">{crew.slice(0, 6).map(person => <CrewCard key={person.id} person={person} selected={expedition.includes(person.id)} onClick={() => toggleExpedition(person.id)} />)}</div></article>
-        <article className="panel rv-panel"><div className="panel-heading"><div><small>RV MAINLINE</small><h2>房车修复</h2></div><strong className="percent">{repairPercent}%</strong></div><div className="rv-exterior-stage"><div className="rv-exterior-image" role="img" aria-label="完整带车顶的房车俯视图" /><div className="rv-exterior-meta"><span>RV-07 · ROOF SCAN</span><b>远征房车 · 外部结构</b></div></div><div className="repair-list">{Object.entries(repair).map(([name, value]) => <button key={name} onClick={() => repairPart(name as keyof typeof repair)}><span>{name}<i style={{ width: `${value * 10}%` }} /></span><b>{value} · {activeRole("机械师") ? 3 : 4}零件</b></button>)}</div></article>
-      </section>
-      <section className="upgrades-panel panel"><div className="panel-heading"><div><small>RV SYSTEMS</small><h2>房车建设</h2></div><span className="selection-count">搜索物资 → 提交零件 → 强化长期能力</span></div><div className="upgrade-grid">{Object.entries(upgrades).map(([name, level]) => <button onClick={() => upgradeRv(name as keyof typeof upgrades)} key={name}><span>{name.slice(0, 1)}</span><div><b>{name}</b><small>等级 {level}/3 · {6 + level * 4}零件</small></div><em>+</em></button>)}</div></section>
+    {tab === "房车" && <><section className="rv-command-center">
+      <header className="command-heading"><div><small>RV READY ROOM · ROUND {String(day).padStart(2, "0")}</small><h1>房车整备舱</h1><p>这里只确认行动人员与现有装备；点击底部出发控制台后，再选择目的地并查看完整风险简报。</p></div><div className="command-heading-status"><span>距离封锁线 <b>{Math.max(120, 780 - day * 24)} KM</b></span><span>房车修复 <b>{repairPercent}%</b></span><button className={resetArmed ? "command-reset armed" : "command-reset"} onClick={resetLocalGame}>{resetArmed ? "确认清除存档" : "重开存档"}</button></div></header>
+
+      <div className="command-main-grid home-ready-grid">
+        <article className="command-module command-squad home-squad"><header><div><small>EXPEDITION SQUAD</small><h2>行动小队 <span>{actionCrew.length}/3</span></h2></div><button onClick={() => openCrewModal(0)}>调整行动组</button></header><div className="command-squad-grid">{Array.from({ length: 3 }).map((_, index) => { const person = actionCrew[index]; const labels = ["队长", "战斗位", "支援位"]; return person ? <button className={`command-member fixed-visual-card ${qualityClass[person.quality]} ${person.injury ? "injured" : ""}`} onClick={() => openCrewModal(index)} key={person.id}><header><span>{labels[index]}</span><em>{person.quality}</em></header><div className={`command-member-avatar fixed-squad-art squad-art-${index}`} aria-hidden="true" /><div className="command-member-identity"><h3>{person.name}</h3><p>{person.role} / {person.subRole}</p><small>{person.injury ? `${person.injury.severity} · 无法出战` : person.trait}</small></div><div className="command-member-stats"><span>战斗 <b>{person.attack}</b></span><span>防御 <b>{person.defense}</b></span><span>体力 <b>{person.stamina}</b></span></div></button> : <button className="command-member empty" onClick={() => openCrewModal(index)} key={index}><span>+</span><b>{labels[index]}</b><small>点击配置幸存者</small></button>; })}</div></article>
+
+        <article className="command-module command-loadout"><header><div><small>SHARED LOADOUT</small><h2>行动装备</h2></div><button onClick={() => setLoadoutModalOpen(true)}>更换装备</button></header><div className="command-loadout-list">{(Object.keys(kitLabels) as KitSlot[]).map(slot => { const gear = selectedGear(slot); return <button onClick={() => { setPrepSlot(slot); setLoadoutModalOpen(true); }} key={slot}><i>{kitLabels[slot].slice(0, 1)}</i><div><small>{kitLabels[slot]}</small><b>{kit[slot]}</b><span>{gear.note}</span></div><em>更换</em></button>; })}</div><footer><div><span>共享战斗力</span><b>{actionAttack}</b></div><div><span>共享防御</span><b>{actionDefense}</b></div><p>装备增益由三名行动成员共享；高级装备需从战局中成功撤回。</p></footer></article>
+      </div>
+
+      <div className="command-support-grid"><article className="command-module command-tasks"><header><div><small>ROUND TASKS</small><h2>本回合待办</h2></div><span>{injuredCrew.length + (repairPercent < 100 ? 1 : 0)}</span></header><button onClick={() => { setWarehouseTab("冰箱"); setTab("仓库"); }}><i className="medical">+</i><div><b>伤员治疗</b><small>{injuredCrew.length ? `${injuredCrew.length}名成员等待药物治疗` : "当前没有伤员"}</small></div><span>前往</span></button><button onClick={() => setTab("队伍")}><i>⌂</i><div><b>房车岗位</b><small>{seatAssignments.filter(Boolean).length}/10 个岗位已有成员</small></div><span>查看</span></button></article>
+        <article className={`command-module command-contract persistent-contract ${activeContract.mystery ? "mystery" : ""}`}><header><div><small>{activeContract.mystery ? "UNKNOWN FREQUENCY · BONUS CONTRACT" : "PERMANENT CONTRACT BOARD · 10 CATEGORIES"}</small><h2>{activeContract.mystery ? "来自神秘信号的委托" : `常驻委托 · ${activeContract.category}`}</h2></div><span>{contractMainIndex}<small>已完成</small></span></header><div className="contract-objective"><i>{activeContract.icon}</i><p><b>{activeContract.title}</b><small>{activeContract.description}</small></p><strong>{Math.min(activeContract.target, contractProgress)}/{activeContract.target}</strong></div><footer><div className="contract-progress"><i><em style={{ width: `${Math.min(100, contractProgress / activeContract.target * 100)}%` }} /></i><span>{contractProgress >= activeContract.target ? "目标已达成，等待你确认领取" : activeContract.mystery ? "奖励任务完成后继续常驻任务链" : `第 ${contractMainIndex + 1} 份常驻委托 · ${contractsUntilSignal}份后收到神秘信号`}</span></div><section><small>完成奖励</small><div>{activeContract.rewards.map((reward, index) => <span key={`${reward.label}-${index}`}>{reward.label}</span>)}</div></section>{activeContract.metric === "submitted" && contractProgress < activeContract.target && <button className={contractSubmitItem ? "ready" : ""} disabled={!contractSubmitItem} onClick={submitActiveContractItem}>{contractSubmitItem ? `提交「${activeContract.submitItemName}」` : `仓库中缺少「${activeContract.submitItemName}」`}</button>}<button className={`contract-claim ${contractProgress >= activeContract.target ? "ready" : ""}`} disabled={contractProgress < activeContract.target} onClick={completeActiveContract}>{contractProgress >= activeContract.target ? "确认完成并领取奖励" : "完成目标后手动确认"}</button></footer>{contractCompletionNote && <button className="contract-complete-note" onClick={() => setContractCompletionNote("")}><span>✓</span><p>{contractCompletionNote}</p><em>关闭</em></button>}</article>
+        {!endingUnlocked && <article className="command-module command-repair"><header><div><small>RV MAINLINE</small><h2>房车修复</h2></div><span>{repairPercent}%</span></header><div className="command-rv-image" role="img" aria-label="房车完整车顶俯视图" /><div className="command-repair-list">{Object.entries(repair).map(([name, value]) => { const key = name as keyof typeof repair; const required = value < 10 ? repairMaterialTracks[key][value] : "已完成"; return <button key={name} disabled={value >= 10 || (value < 10 && storedCount(required) === 0)} onClick={() => repairPart(key)}><span>{name}<i><em style={{ width: `${value * 10}%` }} /></i></span><b>{value}/10 · {value >= 10 ? "已完成" : `需要「${required}」 ${storedCount(required)}/1`}</b></button>; })}</div></article>}
+        {endingUnlocked && <article className="command-module ending-recall"><small>MAINLINE CLEARED</small><h2>封锁线已经越过</h2><p>房车修复模块已关闭，你仍可继续探索感染区。</p><button onClick={() => setEndingOpen(true)}>{endingLegendaryClaimed && endingCompanionClaimed ? "重看结局" : "查看结局并领取奖励"}</button></article>}
+      </div>
+
+      <footer className="command-action-dock"><div className="readiness-steps"><div className="done"><span>1</span><p><b>检查房车</b><small>修复进度 {repairPercent}%</small></p><em>✓</em></div><i>›</i><div className={actionCrewReady ? "done" : "warning"}><span>2</span><p><b>配置小队</b><small>{actionCrewReady ? "3/3 成员就绪" : `${actionCrew.length}/3 · 需要调整`}</small></p><em>{actionCrewReady ? "✓" : "!"}</em></div><i>›</i><div className={preparationTier > 0 ? "done" : "warning"}><span>3</span><p><b>检查装备</b><small>{preparationTier > 0 ? "共享装备可用" : "当前配置较弱"}</small></p><em>{preparationTier > 0 ? "✓" : "!"}</em></div></div><div className="readiness-summary"><span>整备就绪度</span><div><p>战斗力 <b>{actionAttack}</b></p><p>防御 <b>{actionDefense}</b></p><p>状态 <b>{actionCrewReady ? "就绪" : "待配置"}</b></p></div></div><button className="ignition-button" aria-label="配置下一次行动" onClick={startRun}><span>→</span><div><small>{actionCrewReady ? "READY FOR DEPARTURE" : "ACTION SETUP"}</small><b>{actionCrewReady ? "配置行动并出发" : "先配置行动小队"}</b></div></button></footer>
+    </section>
+      <section className="upgrades-panel panel"><div className="panel-heading"><div><small>RV SYSTEMS</small><h2>房车建设</h2></div><span className="selection-count">搜索物资 → 匹配升级需求 → 强化长期能力</span></div><div className="upgrade-grid">{Object.entries(upgrades).map(([name, level]) => { const key = name as keyof typeof upgrades; const required = level < 3 ? upgradeMaterialTracks[key][level] : "已完成"; return <button disabled={level >= 3 || (level < 3 && storedCount(required) === 0)} onClick={() => upgradeRv(key)} key={name}><span>{name.slice(0, 1)}</span><div><b>{name}</b><small>等级 {level}/3 · {level >= 3 ? "已满级" : `需要「${required}」 ${storedCount(required)}/1`}</small></div><em>+</em></button>; })}</div></section>
+      {crewModalOpen && <div className="modal-backdrop crew-modal-backdrop" onClick={() => setCrewModalOpen(false)}><article className="crew-select-modal" onClick={event => event.stopPropagation()}><header><div><small>RV PERSONNEL · EXPEDITION SQUAD</small><h2>调整三人行动组</h2><p>先选择要调整的位置，再从幸存者名单中指派一人；伤员无法出战。</p></div><button aria-label="关闭行动组弹窗" onClick={() => setCrewModalOpen(false)}>×</button></header><div className="crew-slot-selector">{["队长", "战斗位", "支援位"].map((label, index) => { const member = actionCrew[index]; return <button className={crewModalSlot === index ? "active" : ""} onClick={() => setCrewModalSlot(index)} key={label}><span>{index + 1}</span><div><small>{label}</small><b>{member?.name ?? "待配置"}</b></div><em>{crewModalSlot === index ? "正在调整" : "选择"}</em></button>; })}</div><section className="crew-select-list">{crew.map(person => { const assignedIndex = expedition.indexOf(person.id); const assigned = assignedIndex >= 0; return <button disabled={!!person.injury} className={`${qualityClass[person.quality]} ${assigned ? "assigned" : ""} ${assignedIndex === crewModalSlot ? "target" : ""}`} onClick={() => assignExpeditionSlot(person.id)} key={person.id}><div className="crew-select-portrait"><span>{person.name.slice(0, 1)}</span><small>{person.quality}</small></div><div className="crew-select-profile"><small>{person.role} / {person.subRole}</small><h3>{person.name}</h3><p>{person.trait}</p><em>{person.flaw}</em></div><div className="crew-select-metrics"><span><small>能力</small><b>{person.score}</b></span><span><small>战斗</small><b>{person.attack}</b></span><span><small>防御</small><b>{person.defense}</b></span><span><small>潜力</small><b>{person.potential}</b></span></div><strong>{person.injury ? `${person.injury.severity} · 禁止出战` : assigned ? `已在${["队长", "战斗位", "支援位"][assignedIndex]}` : `编入${["队长", "战斗位", "支援位"][crewModalSlot]}`}</strong></button>; })}</section><footer><div><span>行动组战斗力</span><b>{actionAttack}</b></div><div><span>行动组防御</span><b>{actionDefense}</b></div><p>{actionCrewReady ? "三名成员均可出战" : "行动组尚未完成配置"}</p><button onClick={() => setCrewModalOpen(false)}>完成调整</button></footer></article></div>}
+      {loadoutModalOpen && <div className="modal-backdrop loadout-modal-backdrop" onClick={() => setLoadoutModalOpen(false)}><article className="loadout-modal" onClick={event => event.stopPropagation()}><header><div><small>RV ARMORY · SHARED LOADOUT</small><h2>更换行动装备</h2><p>只显示当前已经拥有的装备；选择后立即应用于三人行动组。</p></div><button aria-label="关闭装备弹窗" onClick={() => setLoadoutModalOpen(false)}>×</button></header><div className="loadout-modal-body"><nav className="loadout-modal-tabs">{(Object.keys(kitLabels) as KitSlot[]).map(slot => <button className={prepSlot === slot ? "active" : ""} onClick={() => setPrepSlot(slot)} key={slot}><span>{kitLabels[slot]}</span><b>{kit[slot]}</b></button>)}</nav><section><div className="loadout-modal-heading"><div><small>AVAILABLE {kitLabels[prepSlot].toUpperCase()}</small><h3>{kitLabels[prepSlot]}库存</h3></div><span>{availableGearOptions(prepSlot).length} 件可用</span></div><div className="loadout-modal-options">{availableGearOptions(prepSlot).map(option => <button onClick={() => setKit(prev => ({ ...prev, [prepSlot]: option.name }))} className={`${kit[prepSlot] === option.name ? "selected" : ""} item-grade-${option.grade}`} key={option.name}><i>{kitLabels[prepSlot].slice(0, 1)}</i><div><span>{gradeNames[option.grade]}</span><b>{option.name}</b><small>{option.note}</small></div><em>{kit[prepSlot] === option.name ? "已装备" : "装备"}</em></button>)}</div></section></div><footer><div><span>共享战斗力</span><b>{actionAttack}</b></div><div><span>共享防御</span><b>{actionDefense}</b></div><button onClick={() => setLoadoutModalOpen(false)}>完成配置</button></footer></article></div>}
     </>}
 
     {tab === "队伍" && <section className="roster-page"><div className="roster-head"><div><small>CREW · GLOBAL SKILLS</small><h1>十个固定岗位</h1><p>岗位可以空缺，角色可拖动换位；伤员仍可留在房车岗位，但完成治疗前无法加入行动组。</p></div><span>{crew.length}<i>/10 人</i></span></div><div className="rv-roster-layout"><div className="rv-floorplan"><div className="rv-front-mark"><b>车头</b><span>固定岗位 · 可空缺</span></div><div className="rv-seat-grid">{rvStations.map((station, index) => { const personId = seatAssignments[index]; const person = crew.find(member => member.id === personId); const familiarity = person ? person.role === station.role ? "注册位置" : person.subRole === station.role ? "熟练" : "陌生" : ""; return <div key={station.role} className={`rv-seat ${draggedOverSeat === index ? "drag-over" : ""} ${person ? "occupied" : "empty"} ${familiarity === "陌生" ? "mismatch" : ""}`} onDragOver={event => { event.preventDefault(); setDraggedOverSeat(index); }} onDragLeave={() => setDraggedOverSeat(null)} onDrop={event => { event.preventDefault(); if (draggedCrew !== null) moveCrewToSeat(draggedCrew, index); }}>{person ? <div draggable onDragStart={() => setDraggedCrew(person.id)} onDragEnd={() => { setDraggedCrew(null); setDraggedOverSeat(null); }} onClick={() => setSelectedCrew(person.id)} className={`rv-person ${qualityClass[person.quality]} ${selectedCrew === person.id ? "selected" : ""} ${person.injury ? "injured" : ""}`}><div className="rv-person-top"><span>{person.score}</span><em>{person.injury ? "伤病停赛" : station.role}</em></div><div className="rv-person-avatar">{person.name.slice(0, 1)}</div><b>{person.name}</b><small>{person.injury ? `${person.injury.severity} · 治疗${person.injury.treatment}/${person.injury.required}` : `${familiarity} · 本职${person.role}`}</small><i /></div> : <div className="vacant-seat"><span>+</span><b>{station.label}</b><small>空缺 · {station.role}</small></div>}<label>{station.skill}</label></div>; })}</div></div>
         {selected && <PersonDetail person={selected} joined panel exclusiveEquipped={exclusiveLoadout[selected.id]} exclusiveAvailable={equipmentStash.find(item => item.type === "专属" && item.exclusiveFor === selected.name)} onEquipExclusive={() => equipExclusive(selected)} onUnequipExclusive={() => unequipExclusive(selected)} onDismiss={() => dismissCrew(selected)} dismissDisabled={crew.filter(member => member.id !== selected.id && !member.injury).length < 3} />}
-      </div><section className={`relationship-seats-panel ${companionUnlocked ? "" : "locked"}`}><header><div><small>MIDNIGHT CABIN · 2 EXTRA ROLES</small><h2>生活舱特殊岗位</h2><p>独立于十名幸存者编制；拖动已同行角色到伴侣席或拉拉队席。</p></div><span>{companionUnlocked ? `${assignedRelationships.length}/2 已入席` : "需要绯红邀约终端"}</span></header><div className="relationship-seat-row">{relationshipStations.map((station, index) => { const person = relationshipRoster.find(entry => entry.id === relationshipAssignments[index]); const familiarity = person ? person.role === station.role ? "注册位置" : "熟练" : ""; return <div className="relationship-seat" key={station.role} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (draggedRelationship !== null) moveRelationshipToSeat(draggedRelationship, index); }}>{person ? <button draggable onDragStart={() => setDraggedRelationship(person.id)} onDragEnd={() => setDraggedRelationship(null)} onClick={() => setSelectedRelationship(person)} className={`relationship-seat-person ${qualityClass[person.quality]}`}><span>{person.score}</span><div>{person.name.slice(0, 1)}</div><b>{person.name}</b><small>{familiarity} · {station.role}</small></button> : <div className="relationship-seat-empty"><span>{companionUnlocked ? "+" : "◇"}</span><b>{station.label}</b><small>{companionUnlocked ? `空缺 · ${station.role}` : "系统尚未解锁"}</small></div>}<label>{station.skill}</label></div>; })}</div>{companionUnlocked && <div className="relationship-bench"><span>待安排同行者</span>{relationshipRoster.filter(person => !relationshipAssignments.includes(person.id)).map(person => <button draggable onDragStart={() => setDraggedRelationship(person.id)} onDragEnd={() => setDraggedRelationship(null)} onClick={() => setSelectedRelationship(person)} key={person.id}><i>{person.name.slice(0, 1)}</i><b>{person.name}</b><small>{person.quality} · {person.role}</small></button>)}{relationshipRoster.length === 0 && <p>尚未邂逅同行者。可在核心区极低概率遇见，或前往“伴侣”板块发出高价邀请。</p>}</div>}</section>{selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(selectedRelationship.id)} onClose={() => setSelectedRelationship(null)} />}</section>}
+      </div><section className={`relationship-seats-panel ${companionUnlocked ? "" : "locked"}`}><header><div><small>MIDNIGHT CABIN · 2 EXTRA ROLES</small><h2>生活舱特殊岗位</h2><p>独立于十名幸存者编制；拖动已同行角色到伴侣席或拉拉队席。</p></div><span>{companionUnlocked ? `${assignedRelationships.length}/2 已入席` : "需要绯红邀约终端"}</span></header><div className="relationship-seat-row">{relationshipStations.map((station, index) => { const person = relationshipRoster.find(entry => entry.id === relationshipAssignments[index]); const familiarity = person ? person.role === station.role ? "注册位置" : "熟练" : ""; return <div className="relationship-seat" key={station.role} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (draggedRelationship !== null) moveRelationshipToSeat(draggedRelationship, index); }}>{person ? <button draggable onDragStart={() => setDraggedRelationship(person.id)} onDragEnd={() => setDraggedRelationship(null)} onClick={() => setSelectedRelationship(person)} className={`relationship-seat-person ${qualityClass[person.quality]}`}><span>{person.score}</span><div>{person.name.slice(0, 1)}</div><b>{person.name}</b><small>{familiarity} · {station.role}</small></button> : <div className="relationship-seat-empty"><span>{companionUnlocked ? "+" : "◇"}</span><b>{station.label}</b><small>{companionUnlocked ? `空缺 · ${station.role}` : "系统尚未解锁"}</small></div>}<label>{station.skill}</label></div>; })}</div>{companionUnlocked && <div className="relationship-bench"><span>待安排同行者</span>{relationshipRoster.filter(person => !relationshipAssignments.includes(person.id)).map(person => <button draggable onDragStart={() => setDraggedRelationship(person.id)} onDragEnd={() => setDraggedRelationship(null)} onClick={() => setSelectedRelationship(person)} key={person.id}><i>{person.name.slice(0, 1)}</i><b>{person.name}</b><small>{person.quality} · {person.role}</small></button>)}{relationshipRoster.length === 0 && <p>尚未邂逅同行者。可在核心区极低概率遇见，或前往“伴侣”板块提交本期指定物资。</p>}</div>}</section>{selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(selectedRelationship.id)} onClose={() => setSelectedRelationship(null)} />}</section>}
 
-    {tab === "仓库" && <section className="warehouse-page"><div className="roster-head"><div><small>THREE STORAGE ZONES · EACH 10×24</small><h1>分类仓库</h1><p>装备柜、冰箱和存储柜独立占格。点击物资先查看详情，再决定使用、提交、安装或出售。</p></div><span>{currentStorage.reduce((n, item) => n + item.w * item.h, 0)}<i>/240 格</i></span></div><div className="warehouse-tabs">{(["装备柜", "冰箱", "存储柜"] as StoreKind[]).map(item => <button className={warehouseTab === item ? "active" : ""} onClick={() => { setWarehouseTab(item); setSelectedStorageItem(null); }} key={item}>{item}<b>{item === "装备柜" ? equipmentStash.length : item === "冰箱" ? survivalStash.length : objectStash.length}</b></button>)}</div><div className="stash-layout"><WarehouseGrid items={currentStorage} action={setSelectedStorageItem} /><aside><small>{warehouseTab}</small><h3>{warehouseTab === "装备柜" ? "决定你能否把大货带回来" : warehouseTab === "冰箱" ? "维持全队共享生存值" : "主线、财富与长期生产"}</h3><p>{warehouseTab === "装备柜" ? "武器、护甲、背包与弹药。高级装备不会凭空出现，必须成功撤离。" : warehouseTab === "冰箱" ? "食物补饱食度，药品补健康；可在房车使用，部分可在局内双击应急。" : "零件提交房车，奢侈品出售，电脑设备安装，钥匙与搜救仪开启特殊系统。"}</p><div><span>已存物品</span><b>{currentStorage.length}</b></div><div><span>总估值</span><b>¥{currentStorage.reduce((n, item) => n + item.value, 0)}</b></div></aside></div>
-      {selectedStorageItem && <div className="item-detail-backdrop" onClick={() => setSelectedStorageItem(null)}><article className={`item-detail-card item-grade-${selectedStorageItem.grade} ${selectedStorageItem.type === "专属" ? "exclusive" : ""}`} onClick={event => event.stopPropagation()}><button className="item-detail-close" onClick={() => setSelectedStorageItem(null)}>×</button><header><span>{gradeNames[selectedStorageItem.grade]} · {selectedStorageItem.type}</span><strong>¥{selectedStorageItem.value.toLocaleString()}</strong></header><div className="item-detail-art"><i>{selectedStorageItem.name.slice(0, 1)}</i><small>{selectedStorageItem.w} × {selectedStorageItem.h}</small></div><h2>{selectedStorageItem.name}</h2><p>{purpose(selectedStorageItem)}</p><section className="item-detail-story"><small>OBJECT HISTORY · 一句话档案</small><p>{lootStory(selectedStorageItem)}</p></section>{selectedStorageItem.exclusiveFor && <div className="warehouse-relic-bind"><span>身份绑定</span><b>{selectedStorageItem.exclusiveFor}</b><small>{selectedStorageItem.bonus}</small></div>}<div className="item-detail-stats"><div><span>占用空间</span><b>{selectedStorageItem.w * selectedStorageItem.h} 格</b></div><div><span>现场搜索</span><b>{selectedStorageItem.searchSeconds.toFixed(1)} 秒</b></div><div><span>存放位置</span><b>{storeKind(selectedStorageItem)}</b></div>{selectedStorageItem.type === "电脑" && <div><span>挖矿效率</span><b>+{miningYield(selectedStorageItem).toFixed(3)}/回合</b></div>}{selectedStorageItem.type === "药品" && <div><span>治疗进度</span><b>+{medicineTreatment(selectedStorageItem)}</b></div>}</div>{selectedStorageItem.type === "药品" && injuredCrew.length > 0 && <section className="injury-treatment-list"><header><div><small>INJURY TREATMENT</small><b>选择一名伤员使用药物</b></div><span>本次 +{medicineTreatment(selectedStorageItem)}</span></header>{injuredCrew.map(person => <button onClick={() => treatCrewInjury(selectedStorageItem, person.id)} key={person.id}><div><b>{person.name}</b><small>{person.injury?.severity} · 剩余 {(person.injury?.required ?? 0) - (person.injury?.treatment ?? 0)}点</small></div><i><em style={{ width: `${(person.injury?.treatment ?? 0) / (person.injury?.required ?? 100) * 100}%` }} /></i><span>治疗</span></button>)}</section>}<div className="item-detail-actions">{(selectedStorageItem.type === "食物" || selectedStorageItem.type === "药品") && <button className="primary-action" onClick={() => useStoredItem(selectedStorageItem)}>{selectedStorageItem.type === "食物" ? "使用并恢复饱食度" : injuredCrew.length ? "仅用于恢复小队健康" : "使用并恢复健康"}</button>}{selectedStorageItem.type === "零件" && <button className="primary-action" onClick={() => submitStoredPart(selectedStorageItem)}>提交房车修复</button>}{selectedStorageItem.type === "电脑" && <button className="primary-action" disabled={selectedHardwareFull} onClick={() => { installHardware(selectedStorageItem); setSelectedStorageItem(null); setTab("电脑"); }}>{selectedHardwareFull ? `${selectedHardwareKind}插槽已满` : "安装到房车电脑"}</button>}{selectedStorageItem.name === "绯红邀约终端" && !companionUnlocked && <button className="primary-action crimson-action" onClick={unlockCompanionSystem}>启用终端 · 解锁伴侣板块</button>}{selectedStorageItem.type === "专属" && (() => { const owner = crew.find(person => person.name === selectedStorageItem.exclusiveFor); return <button className="primary-action" disabled={!owner || !!(owner && exclusiveLoadout[owner.id])} onClick={() => { if (owner) { equipExclusive(owner); setSelectedStorageItem(null); setSelectedCrew(owner.id); setTab("队伍"); } }}>{!owner ? `尚未获得${selectedStorageItem.exclusiveFor}` : exclusiveLoadout[owner.id] ? "该人物插槽已占用" : `装备给${owner.name}`}</button>; })()}<button className="sell-action" onClick={() => sellStoredItem(selectedStorageItem)}>出售 · ¥{selectedStorageItem.value.toLocaleString()}</button><button className="keep-action" onClick={() => setSelectedStorageItem(null)}>保留物品</button></div></article></div>}
+    {tab === "仓库" && <section className="warehouse-page"><div className="roster-head"><div><small>THREE STORAGE ZONES · EACH 10×24</small><h1>分类仓库</h1><p>装备柜、冰箱和存储柜独立占格。点击物资先查看详情，再决定使用、安装、出售或留给房车需求。</p></div><span>{currentStorage.reduce((n, item) => n + item.w * item.h, 0)}<i>/240 格</i></span></div><div className="warehouse-tabs">{(["装备柜", "冰箱", "存储柜"] as StoreKind[]).map(item => <button className={warehouseTab === item ? "active" : ""} onClick={() => { setWarehouseTab(item); setSelectedStorageItem(null); }} key={item}>{item}<b>{item === "装备柜" ? equipmentStash.length : item === "冰箱" ? survivalStash.length : objectStash.length}</b></button>)}</div><div className="stash-layout"><WarehouseGrid items={currentStorage} action={setSelectedStorageItem} /><aside><small>{warehouseTab}</small><h3>{warehouseTab === "装备柜" ? "决定你能否把大货带回来" : warehouseTab === "冰箱" ? "维持全队共享生存值" : "主线、财富与长期生产"}</h3><p>{warehouseTab === "装备柜" ? "武器、护甲、背包与弹药。高级装备不会凭空出现，必须成功撤离。" : warehouseTab === "冰箱" ? "食物补饱食度，药品补健康；可在房车使用，部分可在局内双击应急。" : "物资会被房车修复、建设、委托与邀约直接点名需求；也可出售、安装或开启特殊系统。"}</p><div><span>已存物品</span><b>{currentStorage.length}</b></div><div><span>总估值</span><b>¥{currentStorage.reduce((n, item) => n + item.value, 0)}</b></div></aside></div>
+      {selectedStorageItem && <div className="item-detail-backdrop" onClick={() => setSelectedStorageItem(null)}><article className={`item-detail-card item-grade-${selectedStorageItem.grade} ${selectedStorageItem.type === "专属" ? "exclusive" : ""}`} onClick={event => event.stopPropagation()}><button className="item-detail-close" onClick={() => setSelectedStorageItem(null)}>×</button><header><span>{gradeNames[selectedStorageItem.grade]} · {selectedStorageItem.type}</span><strong>¥{selectedStorageItem.value.toLocaleString()}</strong></header><div className="item-detail-art"><i>{selectedStorageItem.name.slice(0, 1)}</i><small>{selectedStorageItem.w} × {selectedStorageItem.h}</small></div><h2>{selectedStorageItem.name}</h2><p>{purpose(selectedStorageItem)}</p><section className="item-detail-story"><small>OBJECT HISTORY · 一句话档案</small><p>{lootStory(selectedStorageItem)}</p></section>{selectedStorageItem.exclusiveFor && <div className="warehouse-relic-bind"><span>身份绑定</span><b>{selectedStorageItem.exclusiveFor}</b><small>{selectedStorageItem.bonus}</small></div>}<div className="item-detail-stats"><div><span>占用空间</span><b>{selectedStorageItem.w * selectedStorageItem.h} 格</b></div><div><span>现场搜索</span><b>{selectedStorageItem.searchSeconds.toFixed(1)} 秒</b></div><div><span>存放位置</span><b>{storeKind(selectedStorageItem)}</b></div>{selectedStorageItem.type === "电脑" && <div><span>挖矿效率</span><b>+{miningYield(selectedStorageItem).toFixed(3)}/回合</b></div>}{selectedStorageItem.type === "药品" && <div><span>治疗进度</span><b>+{medicineTreatment(selectedStorageItem)}</b></div>}</div>{selectedStorageItem.type === "药品" && injuredCrew.length > 0 && <section className="injury-treatment-list"><header><div><small>INJURY TREATMENT</small><b>选择一名伤员使用药物</b></div><span>本次 +{medicineTreatment(selectedStorageItem)}</span></header>{injuredCrew.map(person => <button onClick={() => treatCrewInjury(selectedStorageItem, person.id)} key={person.id}><div><b>{person.name}</b><small>{person.injury?.severity} · 剩余 {(person.injury?.required ?? 0) - (person.injury?.treatment ?? 0)}点</small></div><i><em style={{ width: `${(person.injury?.treatment ?? 0) / (person.injury?.required ?? 100) * 100}%` }} /></i><span>治疗</span></button>)}</section>}<div className="item-detail-actions">{(selectedStorageItem.type === "食物" || selectedStorageItem.type === "药品") && <button className="primary-action" onClick={() => useStoredItem(selectedStorageItem)}>{selectedStorageItem.type === "食物" ? "使用并恢复饱食度" : injuredCrew.length ? "仅用于恢复小队健康" : "使用并恢复健康"}</button>}{selectedStorageItem.type === "电脑" && <button className="primary-action" disabled={selectedHardwareFull} onClick={() => { installHardware(selectedStorageItem); setSelectedStorageItem(null); setTab("电脑"); }}>{selectedHardwareFull ? `${selectedHardwareKind}插槽已满` : "安装到房车电脑"}</button>}{selectedStorageItem.name === "绯红邀约终端" && !companionUnlocked && <button className="primary-action crimson-action" onClick={unlockCompanionSystem}>启用终端 · 解锁伴侣板块</button>}{selectedStorageItem.type === "专属" && (() => { const owner = crew.find(person => person.name === selectedStorageItem.exclusiveFor); return <button className="primary-action" disabled={!owner || !!(owner && exclusiveLoadout[owner.id])} onClick={() => { if (owner) { equipExclusive(owner); setSelectedStorageItem(null); setSelectedCrew(owner.id); setTab("队伍"); } }}>{!owner ? `尚未获得${selectedStorageItem.exclusiveFor}` : exclusiveLoadout[owner.id] ? "该人物插槽已占用" : `装备给${owner.name}`}</button>; })()}<button className="sell-action" onClick={() => sellStoredItem(selectedStorageItem)}>出售 · ¥{selectedStorageItem.value.toLocaleString()}</button><button className="keep-action" onClick={() => setSelectedStorageItem(null)}>保留物品</button></div></article></div>}
     </section>}
 
     {tab === "电脑" && <section className="system-page"><div className="roster-head"><div><small>PASSIVE MINING RIG</small><h1>房车电脑</h1><p>CPU最多2个、GPU最多8个、内存最多5个。三类齐全才会在每回合结算时推进挖矿。</p></div><span>{miningRate.toFixed(3)}<i>币/回合</i></span></div><div className="mining-hero"><div><small>{miningOnline ? "ONLINE" : "OFFLINE · 缺少完整组件"}</small><h2>矿币进度 {(miningProgress * 100).toFixed(1)}%</h2><i><em style={{ width: `${miningProgress * 100}%` }} /></i><p>每满1.0进度获得1枚矿币。RTX6090单卡每回合 +0.1，GTX960单卡 +0.01。</p></div><button disabled={coins === 0} onClick={() => { setResources(prev => ({ ...prev, 货币: prev.货币 + coins * 1000 })); setCoins(0); }}>出售全部矿币<br /><b>¥{coins * 1000}</b></button></div><div className="computer-slots">{(["CPU", "GPU", "内存"] as HardwareKind[]).map(kind => <section key={kind}><header><div><small>{kind} SLOTS</small><h3>{kind}</h3></div><b>{installed[kind].length}/{({ CPU: 2, GPU: 8, 内存: 5 }[kind])}</b></header><div>{installed[kind].map(item => <button className={`hardware-chip grade-${item.grade}`} onClick={() => uninstallHardware(kind, item)} key={item.id}><b>{item.name}</b><small>+{miningYield(item).toFixed(3)}/回合 · 点击拆下</small></button>)}{Array.from({ length: ({ CPU: 2, GPU: 8, 内存: 5 }[kind]) - installed[kind].length }).map((_, i) => <span className="empty-hardware" key={i}>空插槽</span>)}</div></section>)}</div><div className="hardware-inventory"><div className="panel-heading"><div><small>AVAILABLE HARDWARE</small><h2>存储柜中的电脑设备</h2></div></div><div>{objectStash.filter(item => item.type === "电脑").map(item => <button onClick={() => installHardware(item)} className={`grade-${item.grade}`} key={item.id}><span>{gradeNames[item.grade]}</span><b>{item.name}</b><small>+{miningYield(item).toFixed(3)}币/回合</small></button>)}{!objectStash.some(item => item.type === "电脑") && <p>尚未带回电脑设备。诊疗中心与核心区域更容易找到。</p>}</div></div></section>}
 
     {tab === "黑市" && <section className="system-page"><div className="roster-head"><div><small>REFRESH EVERY TWO ROUNDS</small><h1>地下黑市</h1><p>每两回合刷新10件物品。点击物资先查看档案、故事和用途，再决定是否购买。</p></div><span>{day % 2 === 0 ? 2 : 1}<i>回合后刷新</i></span></div>{!hasMarketLiaison ? <div className="locked-system"><span>LOCKED</span><h2>需要黑市联络员</h2><p>在现场救援或使用搜救仪招募该职业后，暗网终端会自动开放。</p></div> : <div className="market-grid loot-market-grid">{marketOffers.map(item => <LootCard item={item} collected={collectedItems.includes(item.name)} onClick={() => setSelectedMarketItem(item)} key={item.id} />)}</div>}{selectedMarketItem && <LootArchiveDetail item={selectedMarketItem} collected={collectedItems.includes(selectedMarketItem.name)} onClose={() => setSelectedMarketItem(null)} actionLabel={resources.货币 < selectedMarketItem.value ? `货币不足 · 需要 ¥${selectedMarketItem.value.toLocaleString()}` : `购买 · ¥${selectedMarketItem.value.toLocaleString()}`} actionDisabled={resources.货币 < selectedMarketItem.value} onAction={() => { buyOffer(selectedMarketItem); setSelectedMarketItem(null); }} />}</section>}
 
-    {tab === "招聘" && <section className="system-page"><div className="roster-head"><div><small>DIRECTED RESCUE</small><h1>幸存者搜救</h1><p>每次消耗搜救仪随机发现1–3名候选人，品质和职业分别随机，但只能选择其中一人加入。</p></div><span>{searchDevices}<i>个搜救仪</i></span></div>{!hasSearchCaptain ? <div className="locked-system"><span>LOCKED</span><h2>需要搜救队长</h2><p>普通高风险探索仍可能偶遇幸存者；招到搜救队长后才可进行定向搜救。</p></div> : <div className="recruit-system multi-candidate-recruit"><div><small>RESCUE SCANNER</small><h2>{survivorCandidates.length ? `无线电锁定 ${survivorCandidates.length} 名幸存者` : "发出一次随机搜救脉冲"}</h2><p>每次搜索都会重新随机，不再固定出现某个职业。品质概率为普通56%、熟练27%、精英11%、名家5%、传奇1%。</p><button className="primary" disabled={searchDevices === 0 || survivorCandidates.length > 0} onClick={scanSurvivor}>{survivorCandidates.length ? "请先选择一名候选人" : "消耗1个搜救仪"}</button></div>{survivorCandidates.length > 0 && <div className="candidate-selection-panel"><header><span>本次发现 {survivorCandidates.length} 人</span><b>限选 1 人</b></header><SurvivorCandidateChoices candidates={survivorCandidates} canRecruit={crew.length < 10} onRecruit={recruitCandidate} source="搜救" /></div>}</div>}</section>}
+    {tab === "招聘" && <section className="system-page"><div className="roster-head"><div><small>DIRECTED RESCUE</small><h1>幸存者搜救</h1><p>可以消耗搜救仪或支付 ¥10,000 发起搜救。每次随机发现1–3名候选人，最终只能带走一人。</p></div><span>{searchDevices}<i>个搜救仪 · ¥{resources.货币}</i></span></div>{!hasSearchCaptain ? <div className="locked-system"><span>LOCKED</span><h2>需要搜救队长</h2><p>普通高风险探索仍可能偶遇幸存者；招到搜救队长后才可进行定向搜救。</p></div> : <div className="recruit-system multi-candidate-recruit"><div><small>RESCUE SCANNER</small><h2>{survivorCandidates.length ? `无线电锁定 ${survivorCandidates.length} 名幸存者` : "选择一种搜救资源"}</h2><p>品质概率为普通56%、熟练27%、精英11%、名家5%、传奇1%。队伍满员时，可选择新成员并在弹窗中替换旧成员。</p><div className="rescue-payment-actions"><button className="primary" disabled={searchDevices === 0 || survivorCandidates.length > 0} onClick={() => scanSurvivor("device")}>{survivorCandidates.length ? "请先处理候选人" : `搜救仪 · 当前${searchDevices}个`}</button><button disabled={resources.货币 < CASH_RESCUE_PRICE || survivorCandidates.length > 0} onClick={() => scanSurvivor("cash")}>{survivorCandidates.length ? "请先处理候选人" : resources.货币 < CASH_RESCUE_PRICE ? "货币不足" : "支付 ¥10,000 搜救"}</button></div></div>{survivorCandidates.length > 0 && <div className="candidate-selection-panel"><header><span>本次发现 {survivorCandidates.length} 人</span><b>加入或替换 · 限选 1 人</b></header><SurvivorCandidateChoices candidates={survivorCandidates} canRecruit={crew.length < 10} onRecruit={recruitCandidate} onReplace={person => openReplacement(person, "recruit")} source="搜救" /></div>}</div>}{replacementCandidate && <ReplacementModal candidate={replacementCandidate} crew={crew} onReplace={replaceCrewWithCandidate} onClose={() => setReplacementCandidate(null)} />}</section>}
 
-    {tab === "伴侣" && <section className="system-page companion-page"><div className="roster-head"><div><small>MIDNIGHT CABIN · PRIVATE CHANNEL</small><h1>伴侣</h1><p>魅力型角色独立于幸存者名额，只有伴侣席与拉拉队席中的两人会提供全局增益。</p></div><span>{relationshipRoster.length}<i>名同行者</i></span></div>{!companionUnlocked ? <div className={`companion-lock ${crimsonTerminal ? "ready" : ""}`}><div className="companion-lock-mark">♥</div><small>PRIVATE CHANNEL LOCKED</small><h2>暮色会客舱尚未启用</h2><p>在感染区找到红色品质「绯红邀约终端」，放入背包或保险箱并成功撤离。终端进入存储柜后即可使用并永久解锁。</p><div><span>核心区掉落</span><span>红色品质</span><span>撤离后生效</span></div>{crimsonTerminal ? <button className="primary crimson-action" onClick={unlockCompanionSystem}>使用绯红邀约终端 <i>→</i></button> : <button disabled>尚未获得解锁道具</button>}</div> : <><section className="midnight-contact"><div><small>PREMIUM CONTACT</small><h2>{relationshipCandidate ? "私人频道已有一份回应" : "向感染区发出一份高价邀约"}</h2><p>每次联络花费 ¥{RELATIONSHIP_CONTACT_PRICE.toLocaleString()}。品质概率：普通 65%、熟练 24%、精英 8%、名家 2.7%、传奇 0.3%；核心区自然邂逅概率为0.5%。</p><div className="contact-price"><span>本次联络</span><b>¥{RELATIONSHIP_CONTACT_PRICE.toLocaleString()}</b><em>已联络 {relationshipContacts} 次</em></div><button className="primary" disabled={!!relationshipCandidate || resources.货币 < RELATIONSHIP_CONTACT_PRICE} onClick={contactRelationship}>{relationshipCandidate ? "先处理当前回应" : resources.货币 < RELATIONSHIP_CONTACT_PRICE ? "货币不足" : "发送绯红邀约"}</button></div>{relationshipCandidate ? <div className="midnight-candidate"><RelationshipCard person={relationshipCandidate} joined={false} onClick={() => setSelectedRelationship(relationshipCandidate)} /><button onClick={recruitRelationshipCandidate}>邀请加入同行名册</button></div> : <aside><span>0.5%</span><b>核心区自然邂逅</b><p>无需消耗邀约费用，但必须深入核心并持续搜索。</p></aside>}</section><div className="relationship-roster-head"><div><small>ON-ROAD RELATIONSHIPS</small><h2>已同行角色</h2></div><span>拖入队伍页的两个特殊岗位后才会生效</span></div><div className="relationship-grid">{relationshipRoster.map(person => <RelationshipCard person={person} joined assigned={relationshipAssignments.includes(person.id)} onClick={() => setSelectedRelationship(person)} key={person.id} />)}{relationshipRoster.length === 0 && <div className="relationship-empty"><span>♡</span><h3>名单还是空的</h3><p>发送一次邀约，或在核心区以0.5%概率完成自然邂逅。</p></div>}</div></>}{selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(selectedRelationship.id)} onClose={() => setSelectedRelationship(null)} />}</section>}
+    {tab === "伴侣" && <section className={`system-page companion-page ${companionUnlocked ? "unlocked" : "locked"}`}>
+      <div className="companion-page-heading"><h1>暮色同行</h1></div>
+      {!companionUnlocked ? <div className={`companion-lock ${crimsonTerminal ? "ready" : ""}`}><div className="companion-lock-mark">♥</div><small>PRIVATE CHANNEL LOCKED</small><h2>暮色会客舱尚未启用</h2><p>使用红色品质「绯红邀约终端」永久开放私人频道。</p><div><span>初始赠送</span><span>红色品质</span><span>使用后解锁</span></div>{crimsonTerminal ? <button className="primary crimson-action" onClick={unlockCompanionSystem}>使用绯红邀约终端 <i>→</i></button> : <button disabled>尚未获得解锁道具</button>}</div> : <>
+        <section className="companion-exchange-hero">
+          <aside className="companion-exchange-card">{relationshipCandidate ? <><small>PRIVATE RESPONSE</small><h3>频道有了回应</h3><button className="companion-response" onClick={() => setSelectedRelationship(relationshipCandidate)}><img src={relationshipArt(relationshipCandidate, "regular")} alt="" /><div><b>{relationshipCandidate.name}</b><small>{relationshipCandidate.quality} · {relationshipCandidate.role}</small></div><em>查看档案</em></button><p>提交的物资已经交付。邀请后，本期交换即告完成。</p><button className="companion-submit ready" onClick={recruitRelationshipCandidate}>邀请加入同行名册</button></> : <><small>EXCHANGE REQUEST · PLAYER CONTROLLED</small><h3>本期指定物资</h3><div className="companion-request-list">{companionTradeRequirements.map(request => <div className={storedCount(request.name) >= request.quantity ? "complete" : ""} key={request.name}><i>{request.name.slice(0, 1)}</i><p><b>{request.name}</b><small>{gradeNames[request.grade]}品质</small></p><strong>{storedCount(request.name)}/{request.quantity}</strong></div>)}</div><footer><span>合计需求 {companionTradeRequirements.reduce((sum, request) => sum + request.quantity, 0)} 件</span><em>{companionTradeRefreshReady ? "主动刷新已就绪" : `${companionTradeRefreshRounds}回合后可刷新`}</em></footer><div className="companion-exchange-actions"><button className={`companion-submit ${companionTradeReady ? "ready" : ""}`} disabled={!companionTradeReady} onClick={submitCompanionTrade}>{companionTradeReady ? "提交全部物资 · 获取回应" : "物资尚未集齐"}</button><button className={`companion-refresh ${companionTradeRefreshReady ? "ready" : ""}`} disabled={!companionTradeRefreshReady} onClick={refreshCompanionTrade}>{companionTradeRefreshReady ? "更换本期需求" : `再完成 ${companionTradeRefreshRounds} 回合`}</button></div><p className="companion-refresh-note">刷新完全由你决定；不操作就不会替换当前清单。</p></>}</aside>
+        </section>
+        <div className="companion-roster-content"><div className="relationship-roster-head"><div><small>ON-ROAD RELATIONSHIPS</small><h2>已同行角色</h2></div><span>悬停卡片查看第二形态；岗位增益在队伍页入席后生效</span></div><div className="relationship-grid">{relationshipRoster.map(person => <RelationshipCard person={person} joined assigned={relationshipAssignments.includes(person.id)} onClick={() => setSelectedRelationship(person)} key={person.id} />)}{relationshipRoster.length === 0 && <div className="relationship-empty"><span>♡</span><h3>名单还是空的</h3><p>完成一期物资交换，或在核心区触发0.5%的自然邂逅。</p></div>}</div></div>
+      </>}
+      {selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(relationshipRoster.find(entry => entry.name === selectedRelationship.name)?.id ?? -1)} onClose={() => setSelectedRelationship(null)} />}
+    </section>}
 
     {tab === "物资图鉴" && <section className="system-page loot-atlas-page"><div className="roster-head"><div><small>OBJECT COMPENDIUM · LOW TO HIGH</small><h1>感染区物资图鉴</h1><p>每件物资都有自己的用途与一句话档案；点击卡片查看完整详情。红色专属道具只能与对应传奇人物绑定。</p></div><span>{collectedItems.length}<i>/{fieldLootTemplates.length} 已收集</i></span></div><div className="atlas-tabs">{(["全部", "装备柜", "冰箱", "存储柜"] as const).map(item => <button className={atlasFilter === item ? "active" : ""} onClick={() => setAtlasFilter(item)} key={item}>{item}</button>)}</div><div className="atlas-grid loot-atlas-grid">{fieldLootTemplates.filter((item, index, all) => all.findIndex(entry => entry.name === item.name) === index).filter(item => atlasFilter === "全部" || storeKind({ ...item, id: 0 }) === atlasFilter).sort((a, b) => a.grade - b.grade || a.type.localeCompare(b.type, "zh-CN") || a.name.localeCompare(b.name, "zh-CN")).map(item => <LootCard item={item} collected={collectedItems.includes(item.name)} onClick={() => setSelectedAtlasItem(item)} key={item.name} />)}</div>{selectedAtlasItem && <LootArchiveDetail item={selectedAtlasItem} collected={collectedItems.includes(selectedAtlasItem.name)} onClose={() => setSelectedAtlasItem(null)} />}</section>}
 
-    {tab === "人员图鉴" && <section className="system-page"><div className="roster-head"><div><small>PERSONNEL COMPENDIUM · LOW TO HIGH</small><h1>{peopleAtlasTab === "幸存者档案" ? "幸存者人员图鉴" : "魅力型角色"}</h1><p>{peopleAtlasTab === "幸存者档案" ? `${allPersonnelCatalog.length}份幸存者档案全部公开；点击卡片查看职业能力、装备与完整故事。` : `${allRelationshipCatalog.length}名成年魅力型角色独立收录；她们不占幸存者名额，并拥有专属卡面与暮色档案。`}</p></div><span>{peopleAtlasTab === "幸存者档案" ? crew.length : relationshipRoster.length}<i>/{peopleAtlasTab === "幸存者档案" ? allPersonnelCatalog.length : allRelationshipCatalog.length} 已同行</i></span></div><div className="atlas-tabs people-atlas-tabs">{(["幸存者档案", "魅力型角色"] as const).map(item => <button className={peopleAtlasTab === item ? "active" : ""} onClick={() => { setPeopleAtlasTab(item); setSelectedAtlasPerson(null); setSelectedRelationship(null); }} key={item}>{item}<small>{item === "幸存者档案" ? "十职业生存编制" : "伴侣 / 拉拉队员"}</small></button>)}</div>{peopleAtlasTab === "幸存者档案" ? <div className="people-atlas-grid">{[...allPersonnelCatalog].sort((a, b) => catalogQualities.indexOf(a.quality) - catalogQualities.indexOf(b.quality) || a.role.localeCompare(b.role, "zh-CN") || a.score - b.score).map(person => { const joined = crew.some(member => member.name === person.name); return <CrewCard person={person} joined={joined} onClick={() => setSelectedAtlasPerson(person)} key={`${person.role}-${person.name}`} />; })}</div> : <div className="relationship-grid atlas-relationship-grid">{[...allRelationshipCatalog].sort((a, b) => catalogQualities.indexOf(a.quality) - catalogQualities.indexOf(b.quality) || a.score - b.score).map(person => <RelationshipCard person={person} joined={relationshipRoster.some(entry => entry.name === person.name)} assigned={relationshipAssignments.includes(relationshipRoster.find(entry => entry.name === person.name)?.id ?? -1)} onClick={() => setSelectedRelationship(person)} key={person.id} />)}</div>}{selectedAtlasPerson && (() => { const joinedPerson = crew.find(member => member.name === selectedAtlasPerson.name); const detailPerson = joinedPerson ?? selectedAtlasPerson; return <PersonDetail person={detailPerson} joined={!!joinedPerson} exclusiveEquipped={joinedPerson ? exclusiveLoadout[joinedPerson.id] : undefined} exclusiveAvailable={joinedPerson ? equipmentStash.find(item => item.type === "专属" && item.exclusiveFor === joinedPerson.name) : undefined} onEquipExclusive={joinedPerson ? () => equipExclusive(joinedPerson) : undefined} onUnequipExclusive={joinedPerson ? () => unequipExclusive(joinedPerson) : undefined} onDismiss={joinedPerson ? () => dismissCrew(joinedPerson) : undefined} dismissDisabled={joinedPerson ? crew.filter(member => member.id !== joinedPerson.id && !member.injury).length < 3 : true} onClose={() => setSelectedAtlasPerson(null)} />; })()}{selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(relationshipRoster.find(entry => entry.name === selectedRelationship.name)?.id ?? -1)} onClose={() => setSelectedRelationship(null)} />}</section>}
+    {tab === "人员图鉴" && <section className="system-page"><div className="roster-head"><div><small>PERSONNEL COMPENDIUM · LOW TO HIGH</small><h1>{peopleAtlasTab === "幸存者档案" ? "幸存者人员图鉴" : "魅力型角色"}</h1><p>{peopleAtlasTab === "幸存者档案" ? `${allPersonnelCatalog.length}份幸存者档案全部公开；点击卡片查看职业能力、装备与完整故事。` : `${allRelationshipCatalog.length}名成年魅力型角色独立收录；常规卡面悬停后切换夜间形象，已同行角色可保存偏好的卡面。`}</p></div><span>{peopleAtlasTab === "幸存者档案" ? crew.length : relationshipRoster.length}<i>/{peopleAtlasTab === "幸存者档案" ? allPersonnelCatalog.length : allRelationshipCatalog.length} 已同行</i></span></div><div className="atlas-tabs people-atlas-tabs">{(["幸存者档案", "魅力型角色"] as const).map(item => <button className={peopleAtlasTab === item ? "active" : ""} onClick={() => { setPeopleAtlasTab(item); setSelectedAtlasPerson(null); setSelectedRelationship(null); }} key={item}>{item}<small>{item === "幸存者档案" ? "十职业生存编制" : "伴侣 / 拉拉队员"}</small></button>)}</div>{peopleAtlasTab === "幸存者档案" ? <div className="people-atlas-grid">{[...allPersonnelCatalog].sort((a, b) => catalogQualities.indexOf(a.quality) - catalogQualities.indexOf(b.quality) || a.role.localeCompare(b.role, "zh-CN") || a.score - b.score).map(person => { const joined = crew.some(member => member.name === person.name); return <CrewCard person={person} joined={joined} onClick={() => setSelectedAtlasPerson(person)} key={`${person.role}-${person.name}`} />; })}</div> : <div className="relationship-grid atlas-relationship-grid">{[...allRelationshipCatalog].sort((a, b) => catalogQualities.indexOf(a.quality) - catalogQualities.indexOf(b.quality) || a.score - b.score).map(person => { const joined = relationshipRoster.some(entry => entry.name === person.name); return <RelationshipCard person={person} joined={joined} assigned={relationshipAssignments.includes(relationshipRoster.find(entry => entry.name === person.name)?.id ?? -1)} artMode={relationshipArtModes[person.name] ?? "regular"} hoverAllure onToggleArt={joined ? () => toggleRelationshipArt(person) : undefined} onClick={() => setSelectedRelationship(person)} key={person.id} />; })}</div>}{selectedAtlasPerson && (() => { const joinedPerson = crew.find(member => member.name === selectedAtlasPerson.name); const detailPerson = joinedPerson ?? selectedAtlasPerson; return <PersonDetail person={detailPerson} joined={!!joinedPerson} exclusiveEquipped={joinedPerson ? exclusiveLoadout[joinedPerson.id] : undefined} exclusiveAvailable={joinedPerson ? equipmentStash.find(item => item.type === "专属" && item.exclusiveFor === joinedPerson.name) : undefined} onEquipExclusive={joinedPerson ? () => equipExclusive(joinedPerson) : undefined} onUnequipExclusive={joinedPerson ? () => unequipExclusive(joinedPerson) : undefined} onDismiss={joinedPerson ? () => dismissCrew(joinedPerson) : undefined} dismissDisabled={joinedPerson ? crew.filter(member => member.id !== joinedPerson.id && !member.injury).length < 3 : true} onClose={() => setSelectedAtlasPerson(null)} />; })()}{selectedRelationship && <RelationshipDetail person={selectedRelationship} joined={relationshipRoster.some(entry => entry.name === selectedRelationship.name)} assigned={relationshipAssignments.includes(relationshipRoster.find(entry => entry.name === selectedRelationship.name)?.id ?? -1)} artMode={relationshipArtModes[selectedRelationship.name] ?? "regular"} onToggleArt={relationshipRoster.some(entry => entry.name === selectedRelationship.name) ? () => toggleRelationshipArt(selectedRelationship) : undefined} onClose={() => setSelectedRelationship(null)} />}</section>}
+    {replacementCandidate && <ReplacementModal candidate={replacementCandidate} crew={crew} onReplace={replaceCrewWithCandidate} onClose={() => setReplacementCandidate(null)} />}
+    {endingOpen && <div className="ending-backdrop"><section className="ending-scene"><button className="ending-close" onClick={() => setEndingOpen(false)}>×</button><div className="ending-copy"><small>MAINLINE COMPLETE · BEYOND THE QUARANTINE</small><h1>发动机重新响了起来。</h1><p>房车驶出感染区，晨光第一次落在完整的车顶上。故事已经通关，但这条公路仍可继续。</p><div><span>房车修复 100%</span><span>自由探索已保留</span></div></div><div className="ending-rewards"><section><header><span>奖励 01</span><div><b>传奇幸存者三选一</b><small>{endingLegendaryClaimed ? "已领取" : crew.length >= 10 ? "队伍已满，选择后替换一人" : "选择一人加入队伍"}</small></div></header><div>{endingLegendaryCandidates.map(person => <button disabled={endingLegendaryClaimed} className={qualityClass[person.quality]} onClick={() => chooseEndingLegendary(person)} key={person.name}><span>{person.name.slice(0, 1)}</span><p><b>{person.name}</b><small>{person.role} · 战{person.attack} / 防{person.defense}</small></p><em>{endingLegendaryClaimed ? "已完成" : "选择"}</em></button>)}</div></section><section><header><span>奖励 02</span><div><b>同行者三选一</b><small>{endingCompanionClaimed ? "已领取" : "不占幸存者名额"}</small></div></header><div>{endingCompanionCandidates.map(person => <button disabled={endingCompanionClaimed} className={qualityClass[person.quality]} onClick={() => chooseEndingCompanion(person)} key={person.name}><span>{person.name.slice(0, 1)}</span><p><b>{person.name}</b><small>{person.quality} · {person.role}</small></p><em>{endingCompanionClaimed ? "已完成" : "选择"}</em></button>)}</div></section><button className="ending-continue" disabled={!endingLegendaryClaimed || !endingCompanionClaimed} onClick={() => setEndingOpen(false)}>{endingLegendaryClaimed && endingCompanionClaimed ? "继续驶向未知世界" : "领取两份奖励后继续"}</button></div></section></div>}
   </main>;
 }
