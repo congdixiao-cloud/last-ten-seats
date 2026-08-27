@@ -360,7 +360,7 @@ const relationshipArtVersions: Partial<Record<string, string>> = {
 function relationshipArt(person: Relationship, mode: "regular" | "allure") {
   const slug = relationshipArtSlugs[person.name] ?? `profile-${person.id}`;
   const version = relationshipArtVersions[person.name] ?? "v1";
-  return `/assets/companions/companion-${slug}-${mode}-${version}.png`;
+  return `${import.meta.env.BASE_URL}assets/companions/companion-${slug}-${mode}-${version}.png`;
 }
 
 const miningRates: Record<string, number> = { "CPU·老式双核": .002, "CPU·i5处理器": .008, "CPU·服务器旗舰": .025, "GPU·GTX960": .01, "GPU·RTX4070": .035, "GPU·RTX5090": .065, "GPU·RTX6090": .1, "内存·8GB": .003, "内存·32GB高频": .012, "内存·实验型模块": .03 };
